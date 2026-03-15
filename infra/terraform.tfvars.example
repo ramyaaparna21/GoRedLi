@@ -1,0 +1,11 @@
+aws_region       = "us-east-1"
+environment      = "prod"
+
+# From Google Cloud Console → APIs & Services → Credentials → OAuth 2.0 Client ID
+# Type: "Web application" — but no server-side redirect URI needed.
+# Add these Authorized redirect URIs (get extension ID from the browser after loading it):
+#   https://<chrome-extension-id>.chromiumapp.org/   (Chrome)
+#   https://<firefox-extension-id>.extensions.allizom.org/  (Firefox)
+google_client_id = "xxxx.apps.googleusercontent.com"
+
+jwt_secret       = "at-least-32-chars-of-random-secret"

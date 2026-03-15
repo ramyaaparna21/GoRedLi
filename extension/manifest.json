@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Goredli",
+  "version": "0.1.7",
+  "description": "Go-links for your team",
+  "permissions": [
+    "storage",
+    "tabs",
+    "webNavigation",
+    "identity"
+  ],
+  "host_permissions": [
+    "http://go/*",
+    "https://*.cloudfront.net/*",
+    "https://muqoxf7oqgi7ho77vclyec42si0juscy.lambda-url.us-east-1.on.aws/*",
+    "https://oauth2.googleapis.com/*",
+    "https://accounts.google.com/*"
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "Goredli"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "goredli@goredli",
+      "strict_min_version": "109.0"
+    }
+  }
+}

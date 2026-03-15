@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Build output
+web/dist/
+extension/dist/
+extension/web-ext-artifacts/
+backend/bootstrap
+
+# Go binary
+*.tar.gz
+
+# Secrets — never commit
+client_secret_*.json
+extension/.env
+infra/terraform.tfvars
+infra/terraform.tfstate
+infra/terraform.tfstate.backup
+infra/.terraform/
+infra/.terraform.lock.hcl
+
+# Binaries
+backend/function.zip
+backend/bootstrap
+
+# Claude local settings
+.claude/
+
+# OS
+.DS_Store
