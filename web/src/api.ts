@@ -3,7 +3,7 @@ import type { GoLink, Member, User, Workspace } from './types'
 const API_URL = import.meta.env.VITE_API_URL || ''
 
 function getToken(): string {
-  return localStorage.getItem('goredli_token') || ''
+  return localStorage.getItem('rred_token') || ''
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -24,15 +24,15 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 export function saveToken(token: string) {
-  localStorage.setItem('goredli_token', token)
+  localStorage.setItem('rred_token', token)
 }
 
 export function clearToken() {
-  localStorage.removeItem('goredli_token')
+  localStorage.removeItem('rred_token')
 }
 
 export function hasToken(): boolean {
-  return !!localStorage.getItem('goredli_token')
+  return !!localStorage.getItem('rred_token')
 }
 
 export const api = {
@@ -42,6 +42,8 @@ export const api = {
   createWorkspace: (name: string) =>
     request<{ id: string }>('/workspaces', { method: 'POST', body: JSON.stringify({ name }) }),
   getWorkspace: (id: string) => request<Workspace>(`/workspaces/${id}`),
+  updateWorkspace: (id: string, name: string) =>
+    request<{ status: string; name: string }>(`/workspaces/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
   updateWorkspaceOrder: (order: string[]) =>
     request<{ status: string }>('/workspace-order', { method: 'PATCH', body: JSON.stringify({ order }) }),
 

@@ -39,6 +39,7 @@ func Build(cfg *config.Config, store *db.Store) http.Handler {
 	mux.HandleFunc("POST /workspaces", authed(h.CreateWorkspace))
 	mux.HandleFunc("PATCH /workspace-order", authed(h.UpdateWorkspaceOrder))
 	mux.HandleFunc("GET /workspaces/{id}", authed(h.GetWorkspace))
+	mux.HandleFunc("PATCH /workspaces/{id}", authed(h.UpdateWorkspace))
 
 	mux.HandleFunc("GET /workspaces/{id}/links", authed(h.ListLinks))
 	mux.HandleFunc("POST /workspaces/{id}/links", authed(h.CreateLink))

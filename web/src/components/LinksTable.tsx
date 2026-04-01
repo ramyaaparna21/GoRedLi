@@ -125,6 +125,7 @@ export default function LinksTable({ workspaceId, workspaces, showWorkspaceCol =
 
   useEffect(() => {
     fetchLinks('', 0, true)
+    return () => clearTimeout(searchTimeout.current)
   }, [workspaceId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleSearchChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -144,7 +145,7 @@ export default function LinksTable({ workspaceId, workspaces, showWorkspaceCol =
   }
 
   async function handleDelete(link: GoLink) {
-    if (!confirm(`Delete go/${link.alias}?`)) return
+    if (!confirm(`Delete r/${link.alias}?`)) return
     await api.deleteLink(link.workspaceId, link.id)
     setLinks((prev) => prev.filter((l) => l.id !== link.id))
   }
@@ -191,7 +192,7 @@ export default function LinksTable({ workspaceId, workspaces, showWorkspaceCol =
             )}
             {links.map((link) => (
               <tr key={link.id}>
-                <td><code>go/{link.alias}</code></td>
+                <td><code>r/{link.alias}</code></td>
                 <td style={{ maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   <a href={link.targetUrl} target="_blank" rel="noreferrer">{link.targetUrl}</a>
                 </td>

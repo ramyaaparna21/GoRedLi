@@ -25,7 +25,7 @@ export default function AuthSuccess({ onSuccess }: { onSuccess: (u: User) => voi
 
   return (
     <div className="auth-page">
-      <div className="auth-logo">Goredli</div>
+      <div className="auth-logo">rRed</div>
       <p className="auth-tagline">Signing you in…</p>
     </div>
   )

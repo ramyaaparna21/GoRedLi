@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api'
 
 export default function CreateWorkspace() {
@@ -26,7 +26,7 @@ export default function CreateWorkspace() {
   return (
     <div className="page">
       <div className="page-header">
-        <a href="/" className="btn btn-secondary btn-sm">← Back</a>
+        <Link to="/" className="btn btn-secondary btn-sm">← Back</Link>
         <h1 className="page-title">Create workspace</h1>
       </div>
       <div className="card" style={{ maxWidth: 400 }}>

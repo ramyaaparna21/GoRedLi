@@ -374,6 +374,21 @@ func (st *Store) CreateWorkspace(ctx context.Context, userID, userEmail, name st
 	return wsID, nil
 }
 
+func (st *Store) UpdateWorkspaceName(ctx context.Context, wsID, name string) error {
+	_, err := st.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:        &st.table,
+		Key:              key(wsPK(wsID), "META"),
+		UpdateExpression: aws.String("SET #n = :n"),
+		ExpressionAttributeNames: map[string]string{
+			"#n": "name",
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":n": av(name),
+		},
+	})
+	return err
+}
+
 func (st *Store) UpdateWorkspaceOrder(ctx context.Context, userID string, order []string) error {
 	orderList, _ := attributevalue.MarshalList(order)
 	pk := userPK(userID)

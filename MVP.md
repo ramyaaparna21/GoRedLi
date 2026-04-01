@@ -1,12 +1,12 @@
-# Goredli — Chrome + Firefox go-links extension MVP
+# rRed — Chrome + Firefox redirects extension MVP
 
 ## Product goal
 
-Build the smallest usable Goredli product with:
+Build the smallest usable rRed product with:
 
 - a Chrome/Firefox extension
 - Google sign-in
-- a lightweight admin web app at `go/main`
+- a lightweight admin web app at `r/main`
 - workspace-based access and ownership
 - ordered workspace resolution
 - clean link management UI
@@ -26,7 +26,7 @@ A user signs in with Google.
 Every user has a default personal workspace created automatically on first sign-in.&#x20;
 A user can also create additional workspaces.
 The creator becomes the first owner of any workspace they create.
-A workspace contains go-links.
+A workspace contains redirects.
 A user can belong to multiple workspaces.
 A user has a personal workspace priority order.
 
@@ -40,7 +40,7 @@ Supported flow:
 
 - user installs extension
 - user signs in with Google on first use
-- user enters a go alias
+- user enters a r/ alias
 - extension calls backend resolve API
 - backend resolves alias using the user’s ordered workspaces
 - extension redirects user to the target URL
@@ -54,7 +54,7 @@ For MVP, keep the extension very thin:
 
 Do not add favorites, recents, offline mode, analytics, or local ranking in v1.
 
-## 2. Admin website at `go/main`
+## 2. Admin website at `r/main`
 
 This is the only management UI.
 
@@ -64,14 +64,14 @@ It should be a lightweight web app that handles:
 - workspace joining if invited later
 - workspace ordering
 - workspace member management
-- go-link listing
-- go-link creation/edit/delete
+- redirect listing
+- redirect creation/edit/delete
 
-`go/main` is the default landing page when a user wants to manage Goredli.
+`r/main` is the default landing page when a user wants to manage rRed.
 
 ## 3. Workspace model
 
-A workspace is a scoped collection of go-links and members.
+A workspace is a scoped collection of redirects and members.
 
 Each workspace has:
 
@@ -96,7 +96,7 @@ This order is used during resolution.
 Example:
 
 - user belongs to Workspace A and Workspace B
-- user searches `go/wiki`
+- user searches `r/wiki`
 - system checks A first, then B
 - first match wins
 
@@ -145,9 +145,9 @@ For MVP, keep this simple:
 
 No advanced invitation workflow is needed unless implementation requires it.
 
-## 7. Go-link model
+## 7. redirect model
 
-A go-link belongs to exactly one workspace.
+A redirect belongs to exactly one workspace.
 
 Fields:
 
@@ -173,11 +173,11 @@ Rules:
 - auth completes
 - system creates the user’s default personal workspace if it does not already exist
 - personal workspace is added to the user’s workspace list by default
-- extension can now resolve go aliases
+- extension can now resolve r/ aliases
 
-### Flow 2: open `go/main`
+### Flow 2: open `r/main`
 
-- user opens `go/main`
+- user opens `r/main`
 - page shows two top-level buttons: `Add workspace` and `Add link`
 - page shows two tables:
   - workspaces table
@@ -203,12 +203,12 @@ Rules:
 
 ### Flow 5: links table
 
-- user sees a table of go-links in a clean tabular format
+- user sees a table of redirects in a clean tabular format
 - table shows link columns such as alias, target URL, workspace, title, and updatedAt
 - only the top 25 links are loaded initially
 - additional links are loaded lazily as needed
 - the table has a search button and filter option
-- user can browse links from `go/main`
+- user can browse links from `r/main`
 - the `Add link` button at the top opens the add link flow
 - owners can add, edit, or delete links for workspaces they are users of
 
@@ -221,7 +221,7 @@ Rules:
 - user optionally enters title
 - system validates that the alias is unique within the selected workspace
 - link is created
-- user is redirected back to `go/main`
+- user is redirected back to `r/main`
 - new link appears in the links table
 
 ### Flow 7: workspace management page
@@ -248,10 +248,10 @@ The MVP should be very cheap to operate.
 - Chrome/Firefox extension
 - Google OAuth sign-in
 - backend resolve API
-- lightweight admin website at `go/main`
+- lightweight admin website at `r/main`
 - create workspace
 - ordered workspace list per user
-- go-link CRUD in admin site
+- redirect CRUD in admin site
 - member management by email
 - roles: user / owner
 - resolution by workspace priority
@@ -281,7 +281,7 @@ Responsibilities:
 - alias input
 - call resolve API
 - redirect browser
-- open `go/main` for admin actions
+- open `r/main` for admin actions
 
 Keep it minimal.
 
@@ -292,10 +292,10 @@ Responsibilities:
 - auth/session handling
 - workspace CRUD
 - workspace ordering UI
-- go-link CRUD
+- redirect CRUD
 - workspace member management page
 
-This is the main Goredli product surface.
+This is the main rRed product surface.
 
 ## 3. Backend API
 
@@ -374,7 +374,7 @@ That is the full MVP rule.
 
 No more security layers in MVP.
 
-## Clean UI structure for `go/main`
+## Clean UI structure for `r/main`
 
 ### Page 1: Home
 
@@ -413,12 +413,12 @@ The MVP is successful if:
 - add/remove members by email
 - reorder workspaces
 - resolve aliases correctly based on that order
-- manage everything through `go/main`
+- manage everything through `r/main`
 
 ## Direct recommendation
 
 Keep the MVP centered on **three surfaces only**:
 
 - extension for resolve
-- `go/main` for admin
+- `r/main` for admin
 - one backend for auth, resolve, workspaces, links, and memberships

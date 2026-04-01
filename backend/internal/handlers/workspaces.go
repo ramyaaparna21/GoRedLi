@@ -64,6 +64,36 @@ func (h *Handler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusCreated, map[string]string{"id": wsID})
 }
 
+func (h *Handler) UpdateWorkspace(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r.Context())
+	wsID := r.PathValue("id")
+
+	role, ok := h.Store.GetUserMembershipRole(r.Context(), userID, wsID)
+	if !ok {
+		h.writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	if role != "owner" {
+		h.writeError(w, http.StatusForbidden, "owner required")
+		return
+	}
+
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Name == "" {
+		h.writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+
+	if err := h.Store.UpdateWorkspaceName(r.Context(), wsID, body.Name); err != nil {
+		h.writeError(w, http.StatusInternalServerError, "failed to update workspace")
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "name": body.Name})
+}
+
 func (h *Handler) UpdateWorkspaceOrder(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.GetUserID(r.Context())
 

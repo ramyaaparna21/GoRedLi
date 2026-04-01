@@ -64,7 +64,7 @@ function showError(msg: string) {
 
 function renderLoggedOut(errorMsg = '') {
   const app = clearApp()
-  app.appendChild(el('div', { class: 'logo' }, 'Goredli'))
+  app.appendChild(el('div', { class: 'logo' }, 'rRed'))
   if (errorMsg) app.appendChild(el('p', { class: 'status' }, errorMsg))
   const btn = el('button', { class: 'btn btn-primary', id: 'sign-in', style: 'width:100%' }, 'Sign in with Google')
   app.appendChild(btn)
@@ -83,7 +83,7 @@ function renderLoggedOut(errorMsg = '') {
 
 function renderLoggedIn(email: string) {
   const app = clearApp()
-  app.appendChild(el('div', { class: 'logo' }, 'Goredli'))
+  app.appendChild(el('div', { class: 'logo' }, 'rRed'))
   app.appendChild(el('div', { class: 'user-email' }, email))
 
   const row = el('div', { class: 'form-row' })
@@ -97,13 +97,13 @@ function renderLoggedIn(email: string) {
   app.appendChild(row)
 
   app.appendChild(el('p', { class: 'status', id: 'status' }))
-  app.appendChild(el('button', { class: 'btn btn-secondary', id: 'open-admin' }, 'Open go/main'))
+  app.appendChild(el('button', { class: 'btn btn-secondary', id: 'open-admin' }, 'Open r/main'))
   app.appendChild(el('button', { class: 'btn btn-link', id: 'sign-out' }, 'Sign out'))
 
   input.focus()
 
   async function handleGo() {
-    const alias = input.value.trim().replace(/^go\//, '').replace(/^\//, '')
+    const alias = input.value.trim().replace(/^r\//, '').replace(/^\//, '')
     if (!alias) return
 
     if (alias === 'main') {

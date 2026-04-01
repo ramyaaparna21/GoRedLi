@@ -76,6 +76,14 @@ resource "aws_lambda_function_url" "api" {
   authorization_type = "NONE"
 }
 
+resource "aws_lambda_permission" "function_url_public" {
+  statement_id           = "AllowPublicFunctionURL"
+  action                 = "lambda:InvokeFunctionUrl"
+  function_name          = aws_lambda_function.api.function_name
+  principal              = "*"
+  function_url_auth_type = "NONE"
+}
+
 output "api_url" {
   value = aws_lambda_function_url.api.function_url
 }

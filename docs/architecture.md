@@ -2,20 +2,18 @@
 
 ## System overview
 
-GoRedLi has three user-facing surfaces:
+rRed has three user-facing surfaces:
 
 | Surface | Technology | Hosting |
 |---|---|---|
 | Browser extension | TypeScript, Manifest V3, webextension-polyfill | Distributed to users |
-| Web admin (`go/main`) | React 18, Vite, TypeScript | S3 + CloudFront |
+| Web admin (`r/main`) | React 18, Vite, TypeScript | S3 + CloudFront |
 | Backend API | Go 1.22, `net/http`, AWS Lambda | Lambda Function URL |
 
 All three talk to a single backend. Authentication uses **JWT** in both cases, but the transport differs:
 
 - **Extension** — stores the JWT in `browser.storage.local` and sends it as `Authorization: Bearer <token>` on every request.
-- **Web admin** — the JWT is set as an HTTP-only `goredli_token` cookie (30-day `MaxAge`, `Secure`, `SameSiteLax`) and sent automatically by the browser via `credentials: 'include'`.
-
-The auth middleware checks the `Authorization` header first, then falls back to the cookie, so a single middleware handles both clients.
+- **Web admin** — receives the JWT from the extension via URL parameter, stores it in `localStorage` as `rred_token`, and sends it as `Authorization: Bearer <token>` on every request.
 
 ---
 
@@ -33,10 +31,10 @@ Internet
 │      │                                                    │
 │      ▼                                                    │
 │  S3 bucket (private, OAC)                                 │
-│  goredli-web-prod-<random>                                │
+│  rred-web-prod-<random>                                │
 │                                                           │
 │  Lambda Function URL (HTTPS)                              │
-│  goredli-api-prod                                         │
+│  rred-api-prod                                         │
 │  arm64, provided.al2023, 256 MB, 30 s timeout            │
 │      │                                                    │
 │  VPC 10.0.0.0/16                                          │
@@ -44,7 +42,7 @@ Internet
 │  │  Private subnets (10.0.1/2.0/24)                 │    │
 │  │      │                                            │    │
 │  │      ├─── RDS PostgreSQL 16 (db.t4g.micro)        │    │
-│  │      │    goredli-prod                            │    │
+│  │      │    rred-prod                            │    │
 │  │      │    encrypted, 7-day backups                │    │
 │  │      │                                            │    │
 │  │  Public subnet (10.0.10.0/24)                     │    │
@@ -56,8 +54,8 @@ Internet
 ```
 
 Security groups:
-- `goredli-lambda` — egress-only (0.0.0.0/0 all ports)
-- `goredli-db` — ingress TCP 5432 from `goredli-lambda` only; not publicly accessible
+- `rred-lambda` — egress-only (0.0.0.0/0 all ports)
+- `rred-db` — ingress TCP 5432 from `rred-lambda` only; not publicly accessible
 
 ---
 
@@ -76,7 +74,7 @@ Security groups:
    - If this is the user's first sign-in (no `user_workspace_order` rows), creates a personal workspace named `"<name>'s workspace"`, inserts an `owner` membership, and inserts `priority_index = 0`.
    - Updates any pre-signup `memberships` where `user_id IS NULL` and `email` matches.
    - Inserts missing rows into `user_workspace_order` for newly linked workspaces, using `ROW_NUMBER()` to assign sequential `priority_index` values after the current max.
-8. Backend signs a JWT (HS256, 30-day expiry), sets it as the `goredli_token` cookie, and — because `state` starts with `"ext:"` — redirects to `ADMIN_APP_URL/auth-success?token=<jwt>`.
+8. Backend signs a JWT (HS256, 30-day expiry), sets it as the `rred_token` (localStorage), and — because `state` starts with `"ext:"` — redirects to `ADMIN_APP_URL/auth-success?token=<jwt>`.
 9. `background.ts` is watching `browser.tabs.onUpdated`. When it sees a tab URL that starts with `ADMIN_APP_URL + '/auth-success'`, it extracts `token` from the query string, stores it in `browser.storage.local` as `jwt`, and closes the tab.
 10. On next popup open, the JWT is found and the user is signed in.
 
@@ -84,11 +82,11 @@ Security groups:
 
 Steps 1–7 are identical except `from=extension` is absent, so `state` has no `"ext:"` prefix.
 
-After step 7, the backend redirects to `ADMIN_APP_URL` (the root of the web admin). The `goredli_token` cookie is already set. `App.tsx` calls `GET /me` on load; the cookie is sent automatically and the user is authenticated.
+After step 7, the backend redirects to `ADMIN_APP_URL` (the root of the web admin). The `rred_token` (localStorage) is already set. `App.tsx` calls `GET /me` on load; the cookie is sent automatically and the user is authenticated.
 
-### 3. go/alias resolution via extension
+### 3. r/alias resolution via extension
 
-1. User navigates to `http://go/wiki` in the browser.
+1. User navigates to `http://r/wiki` in the browser.
 2. `background.ts` listener fires on `browser.webNavigation.onBeforeNavigate` filtered to `{ schemes: ['http'], hostEquals: 'go' }`.
 3. The main-frame check (`frameId === 0`) passes.
 4. Alias is extracted from the pathname: `wiki`.
@@ -100,13 +98,13 @@ After step 7, the backend redirects to `ADMIN_APP_URL` (the root of the web admi
 10. If 404: tab redirected to `ADMIN_APP_URL?notfound=wiki`.
 11. If network error: tab redirected to `ADMIN_APP_URL`.
 
-### 4. go/main redirect (extension intercepting http://go/main)
+### 4. r/main redirect (extension intercepting http://r/main)
 
-1. User navigates to `http://go/main` or `http://go/` (empty alias).
+1. User navigates to `http://r/main` or `http://r/` (empty alias).
 2. `background.ts` checks if `alias === 'main'` or `alias === ''`.
 3. Immediately calls `browser.tabs.update(tabId, { url: ADMIN_APP_URL })` — no API call made.
 
-The popup also handles `go/main` directly: if the alias input contains `main`, it opens `ADMIN_APP_URL` and closes the popup without calling the API.
+The popup also handles `r/main` directly: if the alias input contains `main`, it opens `ADMIN_APP_URL` and closes the popup without calling the API.
 
 ### 5. Admin CRUD (web → backend → DB)
 
@@ -114,7 +112,7 @@ Example: creating a new link.
 
 1. User fills out the link modal in `LinksTable` and clicks Save.
 2. `api.createLink(wsId, { alias, targetUrl, title })` calls `POST /workspaces/{id}/links` with `credentials: 'include'` (cookie).
-3. `AuthMiddleware` extracts the JWT from `goredli_token` cookie, verifies it, injects `userID` and `userEmail` into context.
+3. `AuthMiddleware` extracts the JWT from `rred_token` (localStorage), verifies it, injects `userID` and `userEmail` into context.
 4. `CreateLink` handler calls `requireMembership` — queries `memberships WHERE workspace_id = $1 AND user_id = $2`. 403 if not a member.
 5. Validates that alias is not `"main"` (case-insensitive).
 6. Inserts into `go_links`. If the alias already exists in this workspace, the UNIQUE constraint fires and the handler returns 409.
@@ -138,7 +136,7 @@ Both scripts use `webextension-polyfill` so the same TypeScript source targets b
 
 Build-time constants `__API_URL__` and `__ADMIN_APP_URL__` are injected by Webpack's `DefinePlugin` from the `API_URL` and `ADMIN_APP_URL` environment variables respectively.
 
-### How http://go/* navigation interception works
+### How http://r/* navigation interception works
 
 `background.ts` registers a listener on `browser.webNavigation.onBeforeNavigate` with the filter `{ url: [{ schemes: ['http'], hostEquals: 'go' }] }`. This fires before the browser sends any HTTP request to `http://go`, so the internal hostname never actually resolves — the extension intercepts at the navigation layer and redirects the tab to either the resolved target URL or the admin app.
 
@@ -173,7 +171,7 @@ The `webextension-polyfill` package wraps Chrome's callback-based `chrome.*` API
    - Calls `GET https://www.googleapis.com/oauth2/v2/userinfo` to get `id` (sub), `email`, `name`, `picture`.
    - Calls `upsertUser` (see First sign-in logic below).
    - Signs a JWT.
-   - Sets `goredli_token` cookie: HttpOnly, Secure, SameSiteLax, 30-day TTL.
+   - Sets `rred_token` (localStorage): HttpOnly, Secure, SameSiteLax, 30-day TTL.
    - If extension flow: redirects to `ADMIN_APP_URL/auth-success?token=<jwt>`.
    - If web flow: redirects to `ADMIN_APP_URL`.
 
@@ -195,7 +193,7 @@ The `JWTAuth.Verify` method rejects tokens with unexpected signing methods (prev
 The `AuthMiddleware` in `internal/middleware/auth.go` checks for a token in this order:
 
 1. `Authorization: Bearer <token>` header — used by the extension.
-2. `goredli_token` cookie — used by the web admin.
+2. `rred_token` (localStorage) — used by the web admin.
 
 If neither is present or the token is invalid, it returns `{"error":"unauthorized"}` with 401.
 
@@ -215,7 +213,7 @@ The web admin sends all requests with `credentials: 'include'` so the cookie is 
 
 ## Resolution logic
 
-The resolution query is the core of the go-links feature:
+The resolution query is the core of the redirects feature:
 
 ```sql
 SELECT gl.target_url

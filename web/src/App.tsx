@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
+import { BrowserRouter, Link, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import { api, clearToken, hasToken, saveToken } from './api'
 import type { User } from './types'
 import Home from './pages/Home'
@@ -13,11 +13,22 @@ import WorkspaceDetail from './pages/WorkspaceDetail'
 function NoTokenPage() {
   return (
     <div className="auth-page">
-      <div className="auth-logo">Goredli</div>
-      <p className="auth-tagline">Open this page from the Goredli extension.</p>
-      <p style={{ color: '#9ca3af', fontSize: 12, marginTop: 8 }}>
-        Click the extension icon → Sign in → Open go/main
-      </p>
+      <div className="auth-logo">rRed</div>
+      <p className="auth-tagline">Redirects for your team</p>
+      <div style={{
+        marginTop: 24, padding: '16px 24px',
+        background: '#fff', borderRadius: 10,
+        border: '1px solid #e5e7eb',
+        boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+        maxWidth: 320, textAlign: 'center',
+      }}>
+        <p style={{ color: '#374151', fontSize: 13, lineHeight: 1.6 }}>
+          Open this page from the <strong>rRed</strong> extension
+        </p>
+        <p style={{ color: '#9ca3af', fontSize: 12, marginTop: 8, lineHeight: 1.5 }}>
+          Extension icon &rarr; Sign in &rarr; r/main
+        </p>
+      </div>
     </div>
   )
 }
@@ -25,7 +36,7 @@ function NoTokenPage() {
 function Topbar({ user, onLogout }: { user: User; onLogout: () => void }) {
   return (
     <nav className="topbar">
-      <a href="/" className="topbar-logo">Goredli</a>
+      <Link to="/" className="topbar-logo">rRed</Link>
       <div className="topbar-spacer" />
       <span className="topbar-user">{user.email}</span>
       <button className="btn btn-secondary btn-sm" onClick={onLogout}>Sign out</button>
@@ -36,7 +47,7 @@ function Topbar({ user, onLogout }: { user: User; onLogout: () => void }) {
 function AuthCallbackPage() {
   return (
     <div className="auth-page">
-      <div className="auth-logo">Goredli</div>
+      <div className="auth-logo">rRed</div>
       <p className="auth-tagline">Sign-in complete. You can close this tab.</p>
     </div>
   )

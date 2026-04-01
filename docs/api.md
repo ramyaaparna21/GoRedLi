@@ -12,7 +12,7 @@
 All protected endpoints accept the JWT in one of two ways (checked in this order):
 
 1. `Authorization: Bearer <token>` header — used by the extension.
-2. `goredli_token` HTTP-only cookie — set by the backend after sign-in, used by the web admin.
+2. `rred_token` HTTP-only cookie — set by the backend after sign-in, used by the web admin.
 
 Unauthenticated requests to protected endpoints receive:
 
@@ -94,7 +94,7 @@ OAuth callback. Called by Google after the user consents. Not called directly by
 
 **Side effects**:
 - Clears `oauth_state` cookie.
-- Sets `goredli_token` cookie (HttpOnly, Secure, SameSiteLax, 30-day TTL).
+- Sets `rred_token` cookie (HttpOnly, Secure, SameSiteLax, 30-day TTL).
 - Creates or updates user record; creates personal workspace on first sign-in; links pre-signup memberships.
 
 ---
@@ -112,7 +112,7 @@ Clears the session cookie.
 { "status": "ok" }
 ```
 
-**Side effects**: Sets `goredli_token` cookie with `MaxAge: -1` (immediate expiry).
+**Side effects**: Sets `rred_token` cookie with `MaxAge: -1` (immediate expiry).
 
 Note: this endpoint does not invalidate the JWT itself — the token remains valid until its 30-day expiry. The extension handles logout by removing the JWT from `browser.storage.local` directly.
 
@@ -151,7 +151,7 @@ Returns the authenticated user's profile.
 
 #### `GET /resolve`
 
-Resolves a go-link alias to a target URL. This is the endpoint called by the extension's background service worker on every `http://go/*` navigation.
+Resolves a redirect alias to a target URL. This is the endpoint called by the extension's background service worker on every `http://r/*` navigation.
 
 **Auth required**: Yes
 
@@ -181,7 +181,7 @@ Resolution uses the user's workspace priority order (lowest `priority_index` win
 
 #### `GET /links`
 
-Returns go-links across all workspaces the caller is a member of, ordered by `updated_at DESC`.
+Returns redirects across all workspaces the caller is a member of, ordered by `updated_at DESC`.
 
 **Auth required**: Yes
 
@@ -369,7 +369,7 @@ Returns links for a specific workspace, ordered by `updated_at DESC`.
 
 #### `POST /workspaces/{id}/links`
 
-Creates a new go-link in the workspace.
+Creates a new redirect in the workspace.
 
 **Auth required**: Yes. Caller must be a member of the workspace (any role).
 
@@ -403,7 +403,7 @@ Creates a new go-link in the workspace.
 
 #### `PATCH /workspaces/{id}/links/{linkId}`
 
-Updates one or more fields of a go-link. All fields are optional; only provided fields are updated.
+Updates one or more fields of a redirect. All fields are optional; only provided fields are updated.
 
 **Auth required**: Yes. Caller must be a member of the workspace (any role).
 
@@ -439,7 +439,7 @@ Omitting a field leaves it unchanged (uses `COALESCE($param, existing_value)` in
 
 #### `DELETE /workspaces/{id}/links/{linkId}`
 
-Deletes a go-link.
+Deletes a redirect.
 
 **Auth required**: Yes. Caller must be a member of the workspace (any role).
 

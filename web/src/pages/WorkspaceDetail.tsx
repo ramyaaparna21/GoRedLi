@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api'
 import type { Member, Workspace } from '../types'
 import LinksTable from '../components/LinksTable'
@@ -11,6 +11,10 @@ export default function WorkspaceDetail() {
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [members, setMembers] = useState<Member[]>([])
   const [currentUserId, setCurrentUserId] = useState('')
+  const [editingName, setEditingName] = useState(false)
+  const [nameValue, setNameValue] = useState('')
+  const [nameSaving, setNameSaving] = useState(false)
+  const nameInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (!id) return
@@ -30,6 +34,34 @@ export default function WorkspaceDetail() {
     api.getMembers(id).then(setMembers).catch(console.error)
   }
 
+  function startEditingName() {
+    setNameValue(workspace!.name)
+    setEditingName(true)
+    setTimeout(() => nameInputRef.current?.select(), 0)
+  }
+
+  async function saveNameEdit() {
+    if (!id || !workspace || nameSaving) return
+    const trimmed = nameValue.trim()
+    if (!trimmed || trimmed === workspace.name) { setEditingName(false); return }
+    setNameSaving(true)
+    try {
+      await api.updateWorkspace(id, trimmed)
+      setWorkspace({ ...workspace, name: trimmed })
+    } catch {
+      // Revert on failure
+      setNameValue(workspace.name)
+    } finally {
+      setNameSaving(false)
+      setEditingName(false)
+    }
+  }
+
+  function handleNameKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Enter') { (e.currentTarget as HTMLInputElement).blur(); return }
+    if (e.key === 'Escape') { setEditingName(false) }
+  }
+
   if (!workspace || !id) return null
 
   const isOwner = workspace.role === 'owner'
@@ -37,8 +69,28 @@ export default function WorkspaceDetail() {
   return (
     <div className="page">
       <div className="page-header">
-        <a href="/" className="btn btn-secondary btn-sm">← Back</a>
-        <h1 className="page-title">{workspace.name}</h1>
+        <Link to="/" className="btn btn-secondary btn-sm">← Back</Link>
+        {editingName ? (
+          <input
+            ref={nameInputRef}
+            className="page-title-input"
+            value={nameValue}
+            onChange={(e) => setNameValue(e.target.value)}
+            onBlur={saveNameEdit}
+            onKeyDown={handleNameKeyDown}
+            disabled={nameSaving}
+          />
+        ) : (
+          <h1
+            className="page-title"
+            title={isOwner ? 'Click to rename' : undefined}
+            style={isOwner ? { cursor: 'pointer' } : undefined}
+            onClick={isOwner ? startEditingName : undefined}
+          >
+            {workspace.name}
+            {isOwner && <span style={{ marginLeft: 8, fontSize: 14, color: '#9ca3af' }}>✎</span>}
+          </h1>
+        )}
         <span className={`badge badge-${workspace.role}`}>{workspace.role}</span>
       </div>
 

@@ -35,7 +35,7 @@ export default function Home({ user: _user }: Props) {
   return (
     <div className="page">
       <div className="page-header">
-        <h1 className="page-title">Goredli</h1>
+        <h1 className="page-title">rRed</h1>
         <button className="btn btn-primary" onClick={() => navigate('/workspaces/new')}>
           Add workspace
         </button>

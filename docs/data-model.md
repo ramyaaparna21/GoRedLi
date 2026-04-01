@@ -116,7 +116,7 @@ CASCADE rules:
 
 **Alias uniqueness is per-workspace, not global**
 
-`UNIQUE(workspace_id, alias)` on `go_links` means two different workspaces can each have a `go/wiki` link. The resolution query uses `user_workspace_order.priority_index` to decide which one wins for a given user.
+`UNIQUE(workspace_id, alias)` on `go_links` means two different workspaces can each have a `r/wiki` link. The resolution query uses `user_workspace_order.priority_index` to decide which one wins for a given user.
 
 **The alias `main` is reserved at the application layer**
 
@@ -127,7 +127,7 @@ if strings.EqualFold(body.Alias, "main") {
     return
 }
 ```
-`go/main` (and the bare `http://go/`) is intercepted by the extension and always opens the admin web app.
+`r/main` (and the bare `http://r/`) is intercepted by the extension and always opens the admin web app.
 
 **Pre-signup memberships use a nullable `user_id`**
 
@@ -139,7 +139,7 @@ The `AddMember` handler uses an upsert: `INSERT ... ON CONFLICT (workspace_id, e
 
 **Cascade deletes keep the DB consistent**
 
-All foreign keys use `ON DELETE CASCADE`. Deleting a workspace removes all its memberships, workspace-order entries, and go-links in a single statement without application-side cleanup. Deleting a user removes their memberships and workspace-order entries (but not workspaces themselves or their links — other members of those workspaces are unaffected).
+All foreign keys use `ON DELETE CASCADE`. Deleting a workspace removes all its memberships, workspace-order entries, and redirects in a single statement without application-side cleanup. Deleting a user removes their memberships and workspace-order entries (but not workspaces themselves or their links — other members of those workspaces are unaffected).
 
 **Last-owner protection is enforced at the application layer**
 

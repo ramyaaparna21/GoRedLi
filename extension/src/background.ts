@@ -79,13 +79,13 @@ browser.webNavigation.onCompleted.addListener(
     if (details.frameId !== 0) return
 
     const url = details.url
-    console.log('GoRedLi: callback detected', url)
+    console.log('rRed: callback detected', url)
 
     const params = new URL(url).searchParams
     const state = params.get('state')
     const code = params.get('code')
     if (!state || !code) {
-      console.error('GoRedLi: missing state or code in callback URL')
+      console.error('rRed: missing state or code in callback URL')
       return
     }
 
@@ -99,18 +99,18 @@ browser.webNavigation.onCompleted.addListener(
           | { verifier: string; state: string; timestamp: number }
           | undefined
         if (!pending) {
-          console.error('GoRedLi: no pending auth state found in storage')
+          console.error('rRed: no pending auth state found in storage')
           return
         }
 
         if (pending.state !== state) {
-          console.error('GoRedLi: state mismatch', { expected: pending.state, got: state })
+          console.error('rRed: state mismatch', { expected: pending.state, got: state })
           return
         }
 
         // Expire after 5 minutes
         if (Date.now() - pending.timestamp > 5 * 60 * 1000) {
-          console.error('GoRedLi: auth state expired')
+          console.error('rRed: auth state expired')
           await browser.storage.local.remove('pendingAuth')
           return
         }
@@ -120,7 +120,7 @@ browser.webNavigation.onCompleted.addListener(
         // Close the callback tab
         browser.tabs.remove(tabId)
 
-        console.log('GoRedLi: exchanging code for tokens...')
+        console.log('rRed: exchanging code for tokens...')
         const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -135,11 +135,11 @@ browser.webNavigation.onCompleted.addListener(
         })
         if (!tokenRes.ok) {
           const errBody = await tokenRes.text()
-          console.error('GoRedLi: token exchange failed', tokenRes.status, errBody)
+          console.error('rRed: token exchange failed', tokenRes.status, errBody)
           return
         }
         const tokenData = await tokenRes.json() as { id_token: string }
-        console.log('GoRedLi: got id_token, verifying with backend...')
+        console.log('rRed: got id_token, verifying with backend...')
 
         const verifyRes = await fetch(`${API_URL}/auth/verify`, {
           method: 'POST',
@@ -148,60 +148,37 @@ browser.webNavigation.onCompleted.addListener(
         })
         if (!verifyRes.ok) {
           const errBody = await verifyRes.text()
-          console.error('GoRedLi: backend verify failed', verifyRes.status, errBody)
+          console.error('rRed: backend verify failed', verifyRes.status, errBody)
           return
         }
         const { token } = await verifyRes.json() as { token: string }
 
         await browser.storage.local.set({ jwt: token })
-        console.log('GoRedLi: sign-in complete, JWT stored')
+        console.log('rRed: sign-in complete, JWT stored')
       } catch (e) {
-        console.error('GoRedLi: sign-in error', e)
+        console.error('rRed: sign-in error', e)
       }
     })()
   },
   { url: [{ urlPrefix: REDIRECT_URI }] },
 )
 
-// ── go/ link interception ──────────────────────────────────────────────────────
+// ── r/ link interception ──────────────────────────────────────────────────────
+
+// Immediately redirect to the extension's own redirect page so the user never
+// sees Chrome's "This site can't be reached" error while the API resolves.
+const REDIRECT_PAGE = browser.runtime.getURL('redirect/redirect.html')
 
 browser.webNavigation.onBeforeNavigate.addListener(
-  async (details) => {
+  (details) => {
     if (details.frameId !== 0) return
 
     const url = new URL(details.url)
     const alias = url.pathname.replace(/^\/+/, '')
 
-    if (!alias || alias === 'main') {
-      browser.tabs.update(details.tabId, { url: ADMIN_APP_URL })
-      return
-    }
-
-    const jwt = await getJWT()
-    if (!jwt) {
-      browser.tabs.update(details.tabId, { url: ADMIN_APP_URL })
-      return
-    }
-
-    try {
-      const resp = await fetch(`${API_URL}/resolve?alias=${encodeURIComponent(alias)}`, {
-        headers: { Authorization: `Bearer ${jwt}` },
-      })
-
-      if (resp.ok) {
-        const { targetUrl } = await resp.json() as { targetUrl: string }
-        browser.tabs.update(details.tabId, { url: targetUrl })
-      } else if (resp.status === 401) {
-        await browser.storage.local.remove('jwt')
-        browser.tabs.update(details.tabId, { url: ADMIN_APP_URL })
-      } else {
-        browser.tabs.update(details.tabId, {
-          url: `${ADMIN_APP_URL}?notfound=${encodeURIComponent(alias)}`,
-        })
-      }
-    } catch {
-      browser.tabs.update(details.tabId, { url: ADMIN_APP_URL })
-    }
+    browser.tabs.update(details.tabId, {
+      url: `${REDIRECT_PAGE}?alias=${encodeURIComponent(alias)}`,
+    })
   },
-  { url: [{ schemes: ['http'], hostEquals: 'go' }] },
+  { url: [{ schemes: ['http'], hostEquals: 'r' }] },
 )

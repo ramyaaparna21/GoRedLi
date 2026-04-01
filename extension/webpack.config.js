@@ -11,6 +11,7 @@ module.exports = {
   entry: {
     background: './src/background.ts',
     popup: './src/popup/popup.ts',
+    redirect: './src/redirect.ts',
   },
   output: {
     path: path.resolve(__dirname, 'dist'),
@@ -41,6 +42,7 @@ module.exports = {
         { from: 'manifest.json', to: '.' },
         { from: 'src/popup/popup.html', to: 'popup/' },
         { from: 'src/popup/popup.css', to: 'popup/' },
+        { from: 'src/redirect/redirect.html', to: 'redirect/' },
         ...(require('fs').existsSync(path.resolve(__dirname, 'icons'))
           ? [{ from: 'icons', to: 'icons' }]
           : []),
