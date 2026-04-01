@@ -169,6 +169,20 @@ browser.webNavigation.onCompleted.addListener(
 // sees Chrome's "This site can't be reached" error while the API resolves.
 const REDIRECT_PAGE = browser.runtime.getURL('redirect/redirect.html')
 
+// Extract r/alias from a search engine query URL. Returns the alias or null.
+function extractRAlias(url: string): string | null {
+  try {
+    const u = new URL(url)
+    // Google, Bing, Yahoo, DuckDuckGo, Ecosia, Brave, Startpage all use "q" param
+    const q = u.searchParams.get('q') ?? u.searchParams.get('query') ?? ''
+    const match = q.match(/^r\/(.+)$/)
+    return match ? match[1] : null
+  } catch {
+    return null
+  }
+}
+
+// 1) Direct navigation: http://r/alias (works when /etc/hosts is set up)
 browser.webNavigation.onBeforeNavigate.addListener(
   (details) => {
     if (details.frameId !== 0) return
@@ -181,4 +195,30 @@ browser.webNavigation.onBeforeNavigate.addListener(
     })
   },
   { url: [{ schemes: ['http'], hostEquals: 'r' }] },
+)
+
+// 2) Search engine fallback: when Chrome treats r/alias as a search query,
+//    intercept the search navigation and redirect before the search page loads.
+browser.webNavigation.onBeforeNavigate.addListener(
+  (details) => {
+    if (details.frameId !== 0) return
+
+    const alias = extractRAlias(details.url)
+    if (!alias) return
+
+    browser.tabs.update(details.tabId, {
+      url: `${REDIRECT_PAGE}?alias=${encodeURIComponent(alias)}`,
+    })
+  },
+  {
+    url: [
+      { hostSuffix: '.google.com', pathPrefix: '/search' },
+      { hostSuffix: '.bing.com', pathPrefix: '/search' },
+      { hostEquals: 'search.yahoo.com' },
+      { hostEquals: 'duckduckgo.com' },
+      { hostEquals: 'www.ecosia.org', pathPrefix: '/search' },
+      { hostEquals: 'search.brave.com', pathPrefix: '/search' },
+      { hostEquals: 'www.startpage.com', pathPrefix: '/search' },
+    ],
+  },
 )
