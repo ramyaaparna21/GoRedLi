@@ -5,13 +5,14 @@ import type { GoLink, Workspace } from '../types'
 interface LinkFormProps {
   workspaces: Workspace[]
   initial?: GoLink
+  initialAlias?: string
   onSave: () => void
   onCancel: () => void
 }
 
-function LinkModal({ workspaces, initial, onSave, onCancel }: LinkFormProps) {
+function LinkModal({ workspaces, initial, initialAlias, onSave, onCancel }: LinkFormProps) {
   const [wsId, setWsId] = useState(initial?.workspaceId ?? workspaces[0]?.id ?? '')
-  const [alias, setAlias] = useState(initial?.alias ?? '')
+  const [alias, setAlias] = useState(initial?.alias ?? initialAlias ?? '')
   const [targetUrl, setTargetUrl] = useState(initial?.targetUrl ?? '')
   const [title, setTitle] = useState(initial?.title ?? '')
   const [error, setError] = useState('')
@@ -39,7 +40,7 @@ function LinkModal({ workspaces, initial, onSave, onCancel }: LinkFormProps) {
     <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onCancel()}>
       <div className="modal">
         <div className="modal-header">
-          <span className="modal-title">{initial ? 'Edit link' : 'Add link'}</span>
+          <span className="modal-title">{initial ? 'Edit link' : initialAlias ? `Create r/${initialAlias}` : 'Add link'}</span>
           <button className="modal-close" onClick={onCancel}>×</button>
         </div>
         <form onSubmit={handleSubmit}>
@@ -69,6 +70,7 @@ function LinkModal({ workspaces, initial, onSave, onCancel }: LinkFormProps) {
               onChange={(e) => setTargetUrl(e.target.value)}
               placeholder="https://..."
               required
+              autoFocus={!!initialAlias}
             />
           </div>
           <div className="form-group">
@@ -96,18 +98,27 @@ interface Props {
   workspaceId?: string   // if provided, scoped to that workspace; otherwise all workspaces
   workspaces: Workspace[]
   showWorkspaceCol?: boolean
+  initialAlias?: string  // pre-fill alias and auto-open modal (e.g. from ?notfound= redirect)
 }
 
-export default function LinksTable({ workspaceId, workspaces, showWorkspaceCol = false }: Props) {
+export default function LinksTable({ workspaceId, workspaces, showWorkspaceCol = false, initialAlias }: Props) {
   const [links, setLinks] = useState<GoLink[]>([])
   const [search, setSearch] = useState('')
   const [offset, setOffset] = useState(0)
   const [hasMore, setHasMore] = useState(false)
   const [loading, setLoading] = useState(false)
   const [editing, setEditing] = useState<GoLink | null | 'new'>(null)
+  const [pendingAlias, setPendingAlias] = useState(initialAlias)
   const searchTimeout = useRef<ReturnType<typeof setTimeout>>()
 
   const LIMIT = 25
+
+  // Auto-open modal when initialAlias is set and workspaces are loaded
+  useEffect(() => {
+    if (pendingAlias && workspaces.length > 0 && editing === null) {
+      setEditing('new')
+    }
+  }, [pendingAlias, workspaces.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function fetchLinks(q: string, off: number, replace: boolean) {
     setLoading(true)
@@ -156,8 +167,14 @@ export default function LinksTable({ workspaceId, workspaces, showWorkspaceCol =
 
   function refresh() {
     setEditing(null)
+    setPendingAlias(undefined)
     setOffset(0)
     fetchLinks(search, 0, true)
+  }
+
+  function cancelEdit() {
+    setEditing(null)
+    setPendingAlias(undefined)
   }
 
   return (
@@ -225,8 +242,9 @@ export default function LinksTable({ workspaceId, workspaces, showWorkspaceCol =
         <LinkModal
           workspaces={workspaces}
           initial={editing === 'new' ? undefined : editing}
+          initialAlias={editing === 'new' ? pendingAlias : undefined}
           onSave={refresh}
-          onCancel={() => setEditing(null)}
+          onCancel={cancelEdit}
         />
       )}
     </>

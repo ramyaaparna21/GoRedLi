@@ -95,7 +95,7 @@ After step 7, the backend redirects to `ADMIN_APP_URL` (the root of the web admi
 7. Backend runs the resolution query (see [data-model.md](./data-model.md#resolution-query)).
 8. If found: `browser.tabs.update(tabId, { url: targetUrl })` — browser navigates to the real URL.
 9. If 401: JWT removed from storage; tab redirected to `ADMIN_APP_URL`.
-10. If 404: tab redirected to `ADMIN_APP_URL?notfound=wiki`.
+10. If 404: tab redirected to `ADMIN_APP_URL?token=<jwt>&notfound=wiki`. The web admin detects `?notfound=` and auto-opens the "Add link" modal with the alias pre-filled, so the user can immediately save a URL for the missing alias.
 11. If network error: tab redirected to `ADMIN_APP_URL`.
 
 ### 4. r/main redirect (extension intercepting http://r/main)
@@ -105,6 +105,15 @@ After step 7, the backend redirects to `ADMIN_APP_URL` (the root of the web admi
 3. Immediately calls `browser.tabs.update(tabId, { url: ADMIN_APP_URL })` — no API call made.
 
 The popup also handles `r/main` directly: if the alias input contains `main`, it opens `ADMIN_APP_URL` and closes the popup without calling the API.
+
+### 6. Quick-save from the extension popup
+
+1. User clicks the extension icon while on any page.
+2. Popup fetches the current tab's URL and title via `browser.tabs.query()`, and the user's workspaces via `GET /workspaces`.
+3. Popup displays the current page URL, a workspace selector (if multiple), and an alias input with a "Save page" button (primary) and a "Go" button (secondary).
+4. User types an alias (e.g. `wiki`) and clicks "Save page".
+5. Popup calls `POST /workspaces/{wsId}/links` with the alias, current tab URL, and page title.
+6. On success, the status shows "Saved r/wiki" in green. On conflict (409), shows the error.
 
 ### 5. Admin CRUD (web → backend → DB)
 
@@ -130,9 +139,10 @@ The extension has two scripts compiled by Webpack into `dist/`:
 | File | Type | Purpose |
 |---|---|---|
 | `background.js` | Service worker | Navigation interception, OAuth token capture, message listener |
-| `popup.js` | Browser action popup | Sign-in / sign-out UI, manual alias input |
+| `popup.js` | Browser action popup | Sign-in / sign-out, save current page as rlink, go-to-alias |
+| `redirect.js` | Intermediate page | Resolves alias via API, redirects to target or admin app |
 
-Both scripts use `webextension-polyfill` so the same TypeScript source targets both Chrome (`chrome.*`) and Firefox (`browser.*`). The Firefox build is triggered with `BROWSER=firefox npm run build` (the polyfill handles the difference at runtime; no source changes are needed).
+All three scripts use `webextension-polyfill` so the same TypeScript source targets both Chrome (`chrome.*`) and Firefox (`browser.*`). The Firefox build is triggered with `BROWSER=firefox npm run build` (the polyfill handles the difference at runtime; no source changes are needed).
 
 Build-time constants `__API_URL__` and `__ADMIN_APP_URL__` are injected by Webpack's `DefinePlugin` from the `API_URL` and `ADMIN_APP_URL` environment variables respectively.
 

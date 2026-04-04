@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "rRed — Redirects for your team",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Create short redirects (r/alias) that resolve to real URLs. Organize redirects in workspaces with your team.",
   "permissions": [
     "storage",

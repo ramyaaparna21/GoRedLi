@@ -40,7 +40,7 @@ async function resolve() {
       await browser.storage.local.remove('jwt')
       window.location.href = ADMIN_APP_URL
     } else {
-      window.location.href = `${ADMIN_APP_URL}?notfound=${encodeURIComponent(alias)}`
+      window.location.href = `${adminUrl}&notfound=${encodeURIComponent(alias)}`
     }
   } catch {
     window.location.href = adminUrl

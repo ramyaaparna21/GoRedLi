@@ -18,24 +18,78 @@ body {
   margin-bottom: 12px;
 }
 
-.form-row {
-  display: flex;
-  gap: 6px;
+.user-email {
+  font-size: 11px;
+  color: #9ca3af;
   margin-bottom: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-input[type="text"] {
+.page-url {
+  font-size: 11px;
+  color: #6b7280;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-select {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 12px;
+  margin-bottom: 6px;
+  outline: none;
+  background: #fff;
+}
+.ws-select:focus {
+  border-color: #ef4444;
+  box-shadow: 0 0 0 2px #fee2e2;
+}
+
+.input-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.input-prefix {
+  padding: 7px 2px 7px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #6b7280;
+  background: #f9fafb;
+  border: 1px solid #d1d5db;
+  border-right: none;
+  border-radius: 6px 0 0 6px;
+  line-height: 1;
+}
+
+.input-row input[type="text"] {
   flex: 1;
   padding: 7px 10px;
   border: 1px solid #d1d5db;
-  border-radius: 6px;
+  border-radius: 0 6px 6px 0;
   font-size: 13px;
   outline: none;
 }
-
-input[type="text"]:focus {
+.input-row input[type="text"]:focus {
   border-color: #ef4444;
   box-shadow: 0 0 0 2px #fee2e2;
+}
+
+.btn-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
 }
 
 .btn {
@@ -48,8 +102,17 @@ input[type="text"]:focus {
   transition: background 0.15s;
 }
 
-.btn-primary { background: #ef4444; color: #fff; }
+.btn-primary { background: #ef4444; color: #fff; flex: 1; }
 .btn-primary:hover { background: #dc2626; }
+.btn-primary:disabled { background: #fca5a5; cursor: default; }
+
+.btn-ghost {
+  background: none;
+  color: #6b7280;
+  border: 1px solid #d1d5db;
+}
+.btn-ghost:hover { background: #f9fafb; color: #374151; }
+.btn-ghost:disabled { color: #d1d5db; cursor: default; }
 
 .btn-secondary {
   background: #fff;
@@ -76,13 +139,9 @@ input[type="text"]:focus {
   font-size: 12px;
   color: #ef4444;
   margin-bottom: 8px;
+  min-height: 16px;
 }
 
-.user-email {
-  font-size: 11px;
-  color: #9ca3af;
-  margin-bottom: 10px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.status-success {
+  color: #16a34a !important;
 }

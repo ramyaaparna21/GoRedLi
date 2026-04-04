@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../api'
 import type { User, Workspace } from '../types'
 import WorkspaceTable from '../components/WorkspaceTable'
@@ -13,10 +13,22 @@ export default function Home({ user: _user }: Props) {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [saving, setSaving] = useState(false)
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  // Read ?notfound=alias from URL (set by redirect.ts when an alias doesn't exist)
+  const [notFoundAlias] = useState(() => searchParams.get('notfound') || undefined)
 
   useEffect(() => {
     api.getWorkspaces().then(setWorkspaces).catch(console.error)
   }, [])
+
+  // Clean up the notfound param from URL after capturing it
+  useEffect(() => {
+    if (notFoundAlias && searchParams.has('notfound')) {
+      searchParams.delete('notfound')
+      setSearchParams(searchParams, { replace: true })
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleReorder(reordered: Workspace[]) {
     setWorkspaces(reordered)
@@ -57,7 +69,7 @@ export default function Home({ user: _user }: Props) {
         <div className="section-header">
           <span className="section-title">Links</span>
         </div>
-        <LinksTable workspaces={workspaces} showWorkspaceCol />
+        <LinksTable workspaces={workspaces} showWorkspaceCol initialAlias={notFoundAlias} />
       </div>
     </div>
   )
