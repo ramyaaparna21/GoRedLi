@@ -80,7 +80,7 @@ function AppInner() {
       saveToken(urlToken)
       params.delete('token')
       const newUrl = window.location.pathname + (params.toString() ? `?${params}` : '')
-      window.history.replaceState({}, '', newUrl)
+      navigate(newUrl, { replace: true })
     }
 
     if (!hasToken()) {
