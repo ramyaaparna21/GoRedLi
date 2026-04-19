@@ -39,10 +39,111 @@ async function getJWT(): Promise<string | null> {
   return typeof result.jwt === 'string' ? result.jwt : null
 }
 
-// Handle sign-in request from popup
+// ── Links cache ──────────────────────────────────────────────────────────────
+
+interface CachedLink {
+  alias: string
+  targetUrl: string
+  workspaceId: string
+}
+
+async function refreshLinksCache(): Promise<void> {
+  const jwt = await getJWT()
+  if (!jwt) return
+
+  try {
+    // Fetch all links (paginated)
+    const allLinks: CachedLink[] = []
+    let offset = 0
+    const limit = 100
+    while (true) {
+      const res = await fetch(`${API_URL}/links?offset=${offset}&limit=${limit}`, {
+        headers: { Authorization: `Bearer ${jwt}` },
+      })
+      if (!res.ok) break
+      const links = (await res.json()) as CachedLink[]
+      allLinks.push(...links)
+      if (links.length < limit) break
+      offset += limit
+    }
+
+    // Fetch workspaces (returned in priority order)
+    const wsRes = await fetch(`${API_URL}/workspaces`, {
+      headers: { Authorization: `Bearer ${jwt}` },
+    })
+    const workspaces = wsRes.ok
+      ? ((await wsRes.json()) as { id: string }[])
+      : []
+    const wsPriority: Record<string, number> = {}
+    workspaces.forEach((ws, i) => { wsPriority[ws.id] = i })
+
+    // Build alias → targetUrl map respecting workspace priority
+    const sorted = [...allLinks].sort(
+      (a, b) => (wsPriority[a.workspaceId] ?? 999) - (wsPriority[b.workspaceId] ?? 999),
+    )
+    const aliasMap: Record<string, string> = {}
+    for (const link of sorted) {
+      if (!aliasMap[link.alias]) aliasMap[link.alias] = link.targetUrl
+    }
+
+    // Build visit counts for link target URLs from browser history
+    const historyItems = await browser.history.search({
+      text: '',
+      startTime: Date.now() - 90 * 24 * 60 * 60 * 1000,
+      maxResults: 10000,
+    })
+    const linkUrls = new Set(allLinks.map((l) => l.targetUrl))
+    const visitCounts: Record<string, number> = {}
+    for (const item of historyItems) {
+      if (item.url && item.visitCount && linkUrls.has(item.url)) {
+        visitCounts[item.url] = item.visitCount
+      }
+    }
+
+    await browser.storage.local.set({
+      linksCache: allLinks,
+      aliasMap,
+      visitCounts,
+      cacheUpdatedAt: Date.now(),
+    })
+    console.log('rRed: cache refreshed,', allLinks.length, 'links')
+  } catch (e) {
+    console.error('rRed: cache refresh failed', e)
+  }
+}
+
+// Periodic refresh every 5 minutes
+browser.alarms.create('refreshLinksCache', { periodInMinutes: 5 })
+browser.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'refreshLinksCache') refreshLinksCache()
+})
+
+// Initial cache on startup
+refreshLinksCache()
+
+// Handle messages from popup and other extension pages
 browser.runtime.onMessage.addListener((msg: unknown) => {
   if (typeof msg !== 'object' || msg === null) return
   const message = msg as Record<string, unknown>
+
+  if (message.action === 'openPopularUrls') {
+    const popularPage = browser.runtime.getURL('popular/popular.html')
+    browser.tabs.create({ url: popularPage })
+    return
+  }
+
+  if (message.action === 'refreshCache') {
+    refreshLinksCache()
+    return
+  }
+
+  if (message.action === 'getVisitCounts') {
+    // Return cached visit counts as a Promise
+    return browser.storage.local.get('visitCounts').then(
+      (data) => (data.visitCounts as Record<string, number>) || {},
+    )
+  }
+
   if (message.action !== 'startSignIn') return
 
   void (async () => {
@@ -155,6 +256,9 @@ browser.webNavigation.onCompleted.addListener(
 
         await browser.storage.local.set({ jwt: token })
         console.log('rRed: sign-in complete, JWT stored')
+
+        // Populate the local cache immediately so r/alias redirects are instant
+        refreshLinksCache()
       } catch (e) {
         console.error('rRed: sign-in error', e)
       }
@@ -162,6 +266,17 @@ browser.webNavigation.onCompleted.addListener(
   },
   { url: [{ urlPrefix: REDIRECT_URI }] },
 )
+
+// Handle requests from externally connectable web pages (admin app)
+browser.runtime.onMessageExternal.addListener((msg: unknown) => {
+  if (typeof msg !== 'object' || msg === null) return
+  const message = msg as Record<string, unknown>
+
+  if (message.action === 'openPopularUrls') {
+    const popularPage = browser.runtime.getURL('popular/popular.html')
+    browser.tabs.create({ url: popularPage })
+  }
+})
 
 // ── r/ link interception ──────────────────────────────────────────────────────
 
@@ -182,6 +297,9 @@ function extractRAlias(url: string): string | null {
   }
 }
 
+// Extension page for Popular URLs
+const POPULAR_PAGE = browser.runtime.getURL('popular/popular.html')
+
 // 1) Direct navigation: http://r/alias (works when /etc/hosts is set up)
 browser.webNavigation.onBeforeNavigate.addListener(
   (details) => {
@@ -189,6 +307,12 @@ browser.webNavigation.onBeforeNavigate.addListener(
 
     const url = new URL(details.url)
     const alias = url.pathname.replace(/^\/+/, '')
+
+    // Intercept special alias for Popular URLs page
+    if (alias === 'popular-urls') {
+      browser.tabs.update(details.tabId, { url: POPULAR_PAGE })
+      return
+    }
 
     browser.tabs.update(details.tabId, {
       url: `${REDIRECT_PAGE}?alias=${encodeURIComponent(alias)}`,
@@ -206,6 +330,12 @@ browser.webNavigation.onBeforeNavigate.addListener(
     const alias = extractRAlias(details.url)
     if (!alias) return
 
+    // Intercept special alias for Popular URLs page
+    if (alias === 'popular-urls') {
+      browser.tabs.update(details.tabId, { url: POPULAR_PAGE })
+      return
+    }
+
     browser.tabs.update(details.tabId, {
       url: `${REDIRECT_PAGE}?alias=${encodeURIComponent(alias)}`,
     })
@@ -219,6 +349,7 @@ browser.webNavigation.onBeforeNavigate.addListener(
       { hostEquals: 'www.ecosia.org', pathPrefix: '/search' },
       { hostEquals: 'search.brave.com', pathPrefix: '/search' },
       { hostEquals: 'www.startpage.com', pathPrefix: '/search' },
+      { hostEquals: 'www.perplexity.ai', pathPrefix: '/search' },
     ],
   },
 )

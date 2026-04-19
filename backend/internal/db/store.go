@@ -1021,3 +1021,50 @@ func (st *Store) removeWorkspaceFromOrder(ctx context.Context, userID, wsID stri
 	}
 	st.UpdateWorkspaceOrder(ctx, userID, newOrder) //nolint:errcheck
 }
+
+// ── Auth code exchange ───────────────────────────────────────────────────────
+
+// StoreAuthCode saves a short-lived, single-use auth code that maps to a JWT.
+// PK = AUTHCODE#<code>, SK = AUTHCODE#<code>, jwt attribute, expiresAt attribute.
+func (st *Store) StoreAuthCode(ctx context.Context, code, jwtToken string) error {
+	expiresAt := time.Now().Add(60 * time.Second).Unix()
+	_, err := st.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: &st.table,
+		Item: map[string]types.AttributeValue{
+			"PK":        av("AUTHCODE#" + code),
+			"SK":        av("AUTHCODE#" + code),
+			"jwt":       av(jwtToken),
+			"expiresAt": avn(int(expiresAt)),
+		},
+	})
+	return err
+}
+
+// RedeemAuthCode atomically retrieves and deletes a one-time auth code.
+// Returns the JWT if the code is valid and not expired, or an error otherwise.
+func (st *Store) RedeemAuthCode(ctx context.Context, code string) (string, error) {
+	pk := "AUTHCODE#" + code
+	result, err := st.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName:    &st.table,
+		Key:          key(pk, pk),
+		ReturnValues: types.ReturnValueAllOld,
+		ConditionExpression: aws.String("attribute_exists(PK)"),
+	})
+	if err != nil {
+		return "", fmt.Errorf("auth code not found or already used")
+	}
+
+	var item struct {
+		JWT       string `dynamodbav:"jwt"`
+		ExpiresAt int64  `dynamodbav:"expiresAt"`
+	}
+	if err := attributevalue.UnmarshalMap(result.Attributes, &item); err != nil {
+		return "", fmt.Errorf("failed to read auth code")
+	}
+
+	if time.Now().Unix() > item.ExpiresAt {
+		return "", fmt.Errorf("auth code expired")
+	}
+
+	return item.JWT, nil
+}

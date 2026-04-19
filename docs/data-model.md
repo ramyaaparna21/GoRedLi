@@ -1,122 +1,194 @@
 # Data model
 
-## Schema
+## DynamoDB single-table design
 
-All tables are created by `internal/db/migrate.go` using `CREATE TABLE IF NOT EXISTS`, making the migration idempotent. The `pgcrypto` extension is enabled for `gen_random_uuid()`.
+All data lives in a single DynamoDB table (`GoRedLi` by default) with a composite primary key (`PK`, `SK`) and two Global Secondary Indexes (GSI1, GSI2). The table is created by Terraform in production and by `internal/db/migrate.go` in local dev (using DynamoDB Local).
 
-### users
-
-| Column | Type | Constraints | Purpose |
-|---|---|---|---|
-| `id` | UUID | PK, default `gen_random_uuid()` | Surrogate key used everywhere as a foreign key |
-| `google_sub` | TEXT | UNIQUE NOT NULL | Google's stable user identifier (`userinfo.id`); used as the upsert key on sign-in |
-| `email` | TEXT | UNIQUE NOT NULL | Google account email; used for pre-signup membership matching |
-| `name` | TEXT | NOT NULL | Display name from Google profile |
-| `avatar_url` | TEXT | nullable | Google profile picture URL |
-| `created_at` | TIMESTAMPTZ | NOT NULL, default `NOW()` | Row creation timestamp |
-
-`google_sub` and `email` each have their own UNIQUE index. On every sign-in, `email`, `name`, and `avatar_url` are refreshed to reflect any changes on the Google account side.
+Billing mode: pay-per-request (on-demand).
 
 ---
 
-### workspaces
+## Table schema
 
-| Column | Type | Constraints | Purpose |
-|---|---|---|---|
-| `id` | UUID | PK, default `gen_random_uuid()` | Surrogate key |
-| `name` | TEXT | NOT NULL | Human-readable name (e.g. "Engineering", "Alice's workspace") |
-| `created_at` | TIMESTAMPTZ | NOT NULL, default `NOW()` | Row creation timestamp |
+| Attribute | Type | Description |
+|---|---|---|
+| `PK` | String | Partition key |
+| `SK` | String | Sort key |
+| `GSI1PK` | String | GSI1 partition key (membership lookups by user) |
+| `GSI1SK` | String | GSI1 sort key |
+| `GSI2PK` | String | GSI2 partition key (alias resolution) |
+| `GSI2SK` | String | GSI2 sort key |
 
-Workspaces have no direct reference to an owner; ownership is expressed through a `role = 'owner'` membership row.
-
----
-
-### memberships
-
-| Column | Type | Constraints | Purpose |
-|---|---|---|---|
-| `id` | UUID | PK, default `gen_random_uuid()` | Surrogate key |
-| `user_id` | UUID | nullable, FK → `users(id)` ON DELETE CASCADE | Null for pre-signup memberships; filled in when the user first signs in |
-| `workspace_id` | UUID | NOT NULL, FK → `workspaces(id)` ON DELETE CASCADE | The workspace this membership grants access to |
-| `email` | TEXT | NOT NULL | The email address invited; used to match pre-signup memberships when the user signs up |
-| `role` | TEXT | NOT NULL, CHECK IN ('user', 'owner') | Access level — only `owner` can add/update/delete members |
-| `created_at` | TIMESTAMPTZ | NOT NULL, default `NOW()` | Row creation timestamp |
-| _(unique)_ | | UNIQUE(workspace_id, email) | Prevents duplicate invitations; used as the upsert key in `AddMember` |
-
-`user_id` being nullable is intentional: an owner can invite `alice@example.com` before Alice has ever signed in. When Alice first signs in, `UPDATE memberships SET user_id = $1 WHERE email = $2 AND user_id IS NULL` links all pending memberships to her account.
+Both GSIs use `ProjectionType: ALL` (all attributes are projected).
 
 ---
 
-### user_workspace_order
+## Item types
 
-| Column | Type | Constraints | Purpose |
-|---|---|---|---|
-| `user_id` | UUID | NOT NULL, FK → `users(id)` ON DELETE CASCADE | The user whose ordering this is |
-| `workspace_id` | UUID | NOT NULL, FK → `workspaces(id)` ON DELETE CASCADE | The workspace being ordered |
-| `priority_index` | INTEGER | NOT NULL | Lower value = higher priority during alias resolution |
-| _(pk)_ | | PRIMARY KEY (user_id, workspace_id) | Each user has at most one entry per workspace |
+### User
 
-This table is the core of the per-user workspace priority system. Every workspace a user belongs to has exactly one row here. The `priority_index` values are not required to be contiguous — only their relative order matters.
+| Attribute | Example | Description |
+|---|---|---|
+| `PK` | `USER#<uuid>` | User partition key |
+| `SK` | `USER#<uuid>` | Same as PK (single-item pattern) |
+| `googleSub` | `"117..."` | Google's stable user identifier |
+| `email` | `"alice@example.com"` | Google account email |
+| `name` | `"Alice Smith"` | Display name from Google |
+| `avatarUrl` | `"https://lh3..."` | Google profile picture URL |
+| `workspaceOrder` | `["ws-uuid-1", "ws-uuid-2"]` | Ordered list of workspace IDs (index = priority) |
+| `createdAt` | `"2024-01-15T10:00:00Z"` | ISO 8601 timestamp |
+| `entityType` | `"USER"` | Item type discriminator |
 
-When a member is removed from a workspace (`DeleteMember`), the corresponding `user_workspace_order` row is also deleted, so the workspace disappears from their resolution order immediately.
+On every sign-in, `email`, `name`, and `avatarUrl` are refreshed to reflect any Google account changes.
+
+### Google Sub lookup
+
+| Attribute | Example | Description |
+|---|---|---|
+| `PK` | `GSUB#<google-sub>` | Lookup by Google sub |
+| `SK` | `GSUB#<google-sub>` | Same as PK |
+| `userId` | `"<uuid>"` | Points to the user item |
+
+### Email lookup
+
+| Attribute | Example | Description |
+|---|---|---|
+| `PK` | `EMAIL#<email>` | Lookup by email |
+| `SK` | `EMAIL#<email>` | Same as PK |
+| `userId` | `"<uuid>"` | Points to the user item |
+
+### Workspace
+
+| Attribute | Example | Description |
+|---|---|---|
+| `PK` | `WS#<uuid>` | Workspace partition key |
+| `SK` | `META` | Fixed sort key for workspace metadata |
+| `name` | `"Engineering"` | Human-readable name |
+| `ownerCount` | `1` | Number of owners (used for last-owner protection) |
+| `createdAt` | `"2024-01-15T10:00:00Z"` | ISO 8601 timestamp |
+| `entityType` | `"WORKSPACE"` | Item type discriminator |
+
+### Membership
+
+| Attribute | Example | Description |
+|---|---|---|
+| `PK` | `WS#<ws-uuid>` | Workspace partition key |
+| `SK` | `MEM#<mem-uuid>` | Membership sort key |
+| `userId` | `"<uuid>"` or omitted | User ID; empty for pre-signup memberships |
+| `email` | `"alice@example.com"` | Email address |
+| `role` | `"owner"` or `"user"` | Access level |
+| `createdAt` | `"2024-01-15T10:00:00Z"` | ISO 8601 timestamp |
+| `entityType` | `"MEMBERSHIP"` | Item type discriminator |
+| `GSI1PK` | `UMEM#<user-uuid>` or `PMEM#<email>` | User membership index (or pre-signup marker) |
+| `GSI1SK` | `WS#<ws-uuid>` | Workspace reference |
+
+**GSI1** enables two access patterns:
+- `UMEM#<userId>`: Find all workspaces a user is a member of.
+- `PMEM#<email>`: Find pre-signup memberships to link when the user signs up.
+
+### Link
+
+| Attribute | Example | Description |
+|---|---|---|
+| `PK` | `WS#<ws-uuid>` | Workspace partition key |
+| `SK` | `LINK#<link-uuid>` | Link sort key |
+| `alias` | `"wiki"` | Short name for the redirect |
+| `targetUrl` | `"https://notion.so/..."` | Destination URL |
+| `title` | `"Team Wiki"` | Optional description |
+| `createdAt` | `"2024-01-15T10:00:00Z"` | ISO 8601 timestamp |
+| `updatedAt` | `"2024-01-15T10:00:00Z"` | Last update timestamp |
+| `entityType` | `"LINK"` | Item type discriminator |
+| `GSI2PK` | `ALIAS#wiki` | Alias resolution index |
+| `GSI2SK` | `WS#<ws-uuid>` | Workspace reference |
+
+**GSI2** enables the resolution access pattern: query `ALIAS#<alias>` to find all links with that alias across all workspaces.
+
+### Alias guard
+
+| Attribute | Example | Description |
+|---|---|---|
+| `PK` | `WS#<ws-uuid>` | Workspace partition key |
+| `SK` | `ALIAS#wiki` | Alias sort key |
+| `linkId` | `"<uuid>"` | Points to the link item |
+
+Used with a `ConditionExpression: attribute_not_exists(PK)` to enforce alias uniqueness within a workspace via DynamoDB transactions.
+
+### Auth code
+
+| Attribute | Example | Description |
+|---|---|---|
+| `PK` | `AUTHCODE#<hex>` | Auth code partition key |
+| `SK` | `AUTHCODE#<hex>` | Same as PK |
+| `jwt` | `"eyJ..."` | The JWT this code was created from |
+| `expiresAt` | `1712345678` | Unix timestamp (60 seconds after creation) |
+
+Short-lived, single-use codes for passing authentication from the extension to the web admin without exposing the JWT in the URL. Redeemed atomically via `DeleteItem` with `ConditionExpression: attribute_exists(PK)` to prevent double-use.
 
 ---
 
-### go_links
+## Access patterns
 
-| Column | Type | Constraints | Purpose |
+### By primary key (PK + SK)
+
+| Pattern | PK | SK | Returns |
 |---|---|---|---|
-| `id` | UUID | PK, default `gen_random_uuid()` | Surrogate key |
-| `workspace_id` | UUID | NOT NULL, FK → `workspaces(id)` ON DELETE CASCADE | Workspace this link belongs to |
-| `alias` | TEXT | NOT NULL | The short name (e.g. `wiki`, `jira`); case-sensitive in the DB |
-| `target_url` | TEXT | NOT NULL | The destination URL |
-| `title` | TEXT | nullable | Optional human-readable description |
-| `created_at` | TIMESTAMPTZ | NOT NULL, default `NOW()` | Row creation timestamp |
-| `updated_at` | TIMESTAMPTZ | NOT NULL, default `NOW()` | Last update timestamp; set to `NOW()` explicitly in UPDATE statements |
-| _(unique)_ | | UNIQUE(workspace_id, alias) | Alias uniqueness is per-workspace, not global |
+| Get user | `USER#<id>` | `USER#<id>` | User item |
+| Get workspace metadata | `WS#<id>` | `META` | Workspace item |
+| Get membership | `WS#<id>` | `MEM#<mem-id>` | Membership item |
+| Get link | `WS#<id>` | `LINK#<link-id>` | Link item |
+| Get alias guard | `WS#<id>` | `ALIAS#<alias>` | Alias guard item |
+| List workspace members | `WS#<id>` | begins_with `MEM#` | All memberships |
+| List workspace links | `WS#<id>` | begins_with `LINK#` | All links |
+| Google sub lookup | `GSUB#<sub>` | `GSUB#<sub>` | Lookup -> userId |
+| Email lookup | `EMAIL#<email>` | `EMAIL#<email>` | Lookup -> userId |
+
+### By GSI1
+
+| Pattern | GSI1PK | GSI1SK | Returns |
+|---|---|---|---|
+| User's memberships | `UMEM#<userId>` | — | All memberships for user |
+| Check membership in workspace | `UMEM#<userId>` | `WS#<wsId>` | Single membership |
+| Pre-signup memberships | `PMEM#<email>` | — | Pending memberships for email |
+
+### By GSI2
+
+| Pattern | GSI2PK | GSI2SK | Returns |
+|---|---|---|---|
+| Resolve alias | `ALIAS#<alias>` | — | All links with this alias (across workspaces) |
 
 ---
 
 ## Relationships
 
 ```
-users ──────────────────────────────────┐
-  │ id                                  │
-  │                                     │
-  ├── memberships                        │
-  │     user_id (nullable FK → users)   │
-  │     workspace_id FK → workspaces    │
-  │     email                           │
-  │     role                            │
-  │                                     │
-  └── user_workspace_order              │
-        user_id FK → users              │
-        workspace_id FK → workspaces    │
-        priority_index                  │
-                                        │
-workspaces ─────────────────────────────┘
-  │ id
-  │
-  └── go_links
-        workspace_id FK → workspaces
-        alias
-        target_url
+User (USER#<id>)
+  |
+  +-- workspaceOrder: [ws-uuid-1, ws-uuid-2, ...]
+  |     (ordered list stored on user item)
+  |
+  +-- Lookup items:
+        GSUB#<google-sub> -> userId
+        EMAIL#<email> -> userId
 
-CASCADE rules:
-  - DELETE user  → DELETE memberships where user_id matches
-                 → DELETE user_workspace_order where user_id matches
-  - DELETE workspace → DELETE memberships where workspace_id matches
-                     → DELETE user_workspace_order where workspace_id matches
-                     → DELETE go_links where workspace_id matches
+Workspace (WS#<id> / META)
+  |
+  +-- Members (WS#<id> / MEM#<mem-id>)
+  |     GSI1: UMEM#<userId> or PMEM#<email>
+  |
+  +-- Links (WS#<id> / LINK#<link-id>)
+  |     GSI2: ALIAS#<alias>
+  |
+  +-- Alias guards (WS#<id> / ALIAS#<alias>)
+        (uniqueness enforcement)
 ```
 
 ---
 
-## Business rules encoded in the schema
+## Business rules encoded in the data model
 
 **Alias uniqueness is per-workspace, not global**
 
-`UNIQUE(workspace_id, alias)` on `go_links` means two different workspaces can each have a `r/wiki` link. The resolution query uses `user_workspace_order.priority_index` to decide which one wins for a given user.
+The alias guard item (`WS#<wsId>` / `ALIAS#<alias>`) with a `ConditionExpression: attribute_not_exists(PK)` in a DynamoDB transaction ensures that two links in the same workspace cannot share an alias. Different workspaces can each have a `r/wiki` link. The resolution logic uses `workspaceOrder` to decide which one wins for a given user.
 
 **The alias `main` is reserved at the application layer**
 
@@ -129,80 +201,57 @@ if strings.EqualFold(body.Alias, "main") {
 ```
 `r/main` (and the bare `http://r/`) is intercepted by the extension and always opens the admin web app.
 
-**Pre-signup memberships use a nullable `user_id`**
+**Pre-signup memberships use GSI1 with a `PMEM#` prefix**
 
-`memberships.user_id` is nullable so an owner can invite an email address before that person has an account. The UNIQUE constraint is on `(workspace_id, email)`, not on `user_id`, so this works correctly. Once the invited user signs in, `upsertUser` fills in their `user_id`.
+An owner can add an email address to a workspace before that person has an account. The membership's `GSI1PK` is set to `PMEM#<email>` instead of `UMEM#<userId>`. When the invited user signs up, `linkPreSignupMemberships` queries for `PMEM#<email>`, updates each membership to `UMEM#<userId>`, and appends the workspace to the user's `workspaceOrder`.
 
-**Duplicate memberships are prevented and handled gracefully**
+**Last-owner protection uses `ownerCount`**
 
-The `AddMember` handler uses an upsert: `INSERT ... ON CONFLICT (workspace_id, email) DO UPDATE SET role = EXCLUDED.role, user_id = COALESCE(memberships.user_id, EXCLUDED.user_id)`. Re-inviting someone updates their role rather than creating a duplicate row. `user_id` is only overwritten if the existing row has `NULL` (preserving an already-linked user_id).
+The workspace metadata item tracks `ownerCount`. When demoting or removing an owner, a `ConditionExpression: ownerCount > :one` ensures at least one owner remains. Both the role change and the count decrement happen in a single DynamoDB transaction.
 
-**Cascade deletes keep the DB consistent**
+**Duplicate memberships are prevented by upsert logic**
 
-All foreign keys use `ON DELETE CASCADE`. Deleting a workspace removes all its memberships, workspace-order entries, and redirects in a single statement without application-side cleanup. Deleting a user removes their memberships and workspace-order entries (but not workspaces themselves or their links — other members of those workspaces are unaffected).
+The `AddMember` handler checks existing members by email before creating a new membership. If the email already exists, the role is updated in place rather than creating a duplicate row.
 
-**Last-owner protection is enforced at the application layer**
+**Workspace order is denormalized on the user item**
 
-The DB has no constraint preventing all owners from being removed from a workspace. The `UpdateMember` and `DeleteMember` handlers enforce this:
-- If the caller is trying to demote themselves to `user` and they are the only owner, the request is rejected.
-- If the caller is trying to delete themselves and they are the last owner, the request is rejected.
+Instead of a separate join table, the user's workspace order is stored as a list attribute (`workspaceOrder`) directly on the user item. This enables single-item reads for resolution and workspace listing, at the cost of a read-modify-write pattern for reordering.
 
 ---
 
-## Key queries
+## Key operations
 
-### Resolution query
+### Resolution
 
-The query executed by `GET /resolve?alias=<alias>`:
-
-```sql
-SELECT gl.target_url
-FROM go_links gl
-JOIN user_workspace_order uwo ON uwo.workspace_id = gl.workspace_id
-JOIN memberships m ON m.workspace_id = gl.workspace_id AND m.user_id = $1
-WHERE uwo.user_id = $1 AND gl.alias = $2
-ORDER BY uwo.priority_index ASC
-LIMIT 1
-```
-
-Parameters: `$1` = caller's user UUID, `$2` = alias string.
-
-The three-way join ensures:
-1. The link exists (`go_links`).
-2. The caller is a member of the workspace (`memberships`).
-3. The caller has a priority-ordering for the workspace (`user_workspace_order`).
-
-`ORDER BY priority_index ASC LIMIT 1` selects the highest-priority (lowest index) workspace when the alias exists in multiple workspaces.
-
----
+1. Get user item to read `workspaceOrder`.
+2. Query GSI2 for `ALIAS#<alias>` to get all matching link items.
+3. Filter to workspaces present in `workspaceOrder` (membership check).
+4. Sort by index in `workspaceOrder` (lower = higher priority).
+5. Return the target URL from the highest-priority workspace.
 
 ### List workspaces for a user (ordered)
 
-```sql
-SELECT w.id, w.name, w.created_at, m.role, uwo.priority_index
-FROM workspaces w
-JOIN memberships m ON m.workspace_id = w.id AND m.user_id = $1
-JOIN user_workspace_order uwo ON uwo.workspace_id = w.id AND uwo.user_id = $1
-ORDER BY uwo.priority_index ASC
-```
+1. Get user item to read `workspaceOrder`.
+2. Query GSI1 for `UMEM#<userId>` to get role information.
+3. BatchGetItem for workspace metadata items.
+4. Return results in `workspaceOrder` order, enriched with role.
 
-Parameters: `$1` = caller's user UUID.
+### Create workspace (transactional)
 
-Returns only workspaces the user is a member of, enriched with their role and the current priority index.
+A single `TransactWriteItems` creates:
+1. The workspace metadata item.
+2. An owner membership for the creator.
+3. Appends the workspace ID to the creator's `workspaceOrder`.
 
----
+### Create link (transactional)
 
-### List all links for a user across all workspaces
+A single `TransactWriteItems` creates:
+1. The link item (with GSI2 attributes for alias resolution).
+2. The alias guard item (with `ConditionExpression: attribute_not_exists(PK)` for uniqueness).
 
-```sql
-SELECT gl.id, gl.workspace_id, gl.alias, gl.target_url,
-       COALESCE(gl.title, ''), gl.created_at, gl.updated_at
-FROM go_links gl
-JOIN memberships m ON m.workspace_id = gl.workspace_id AND m.user_id = $1
-ORDER BY gl.updated_at DESC
-LIMIT $2 OFFSET $3
-```
+### Update link with alias change (transactional)
 
-Parameters: `$1` = caller's user UUID, `$2` = page size (max 100, default 25), `$3` = offset.
-
-The `JOIN memberships` enforces the membership check — the user only sees links from workspaces they belong to. When a search query is provided, a `WHERE LOWER(gl.alias) LIKE $2 OR LOWER(COALESCE(gl.title, '')) LIKE $2` clause is added (with the search pattern as `$2` and limit/offset shifted to `$3`/`$4`).
+A single `TransactWriteItems`:
+1. Puts the updated link item.
+2. Deletes the old alias guard.
+3. Puts the new alias guard (with uniqueness condition).

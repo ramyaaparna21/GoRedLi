@@ -1,6 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
 import type { GoLink, Workspace } from '../types'
+
+function getVisitCounts(): Record<string, number> {
+  try {
+    return JSON.parse(localStorage.getItem('rred_visit_counts') || '{}')
+  } catch {
+    return {}
+  }
+}
 
 interface LinkFormProps {
   workspaces: Workspace[]
@@ -109,9 +117,27 @@ export default function LinksTable({ workspaceId, workspaces, showWorkspaceCol =
   const [loading, setLoading] = useState(false)
   const [editing, setEditing] = useState<GoLink | null | 'new'>(null)
   const [pendingAlias, setPendingAlias] = useState(initialAlias)
+  const [visitCounts, setVisitCounts] = useState<Record<string, number>>(getVisitCounts)
   const searchTimeout = useRef<ReturnType<typeof setTimeout>>()
 
   const LIMIT = 25
+
+  // Listen for visit count updates from the extension's content script
+  useEffect(() => {
+    function handleUpdate() { setVisitCounts(getVisitCounts()) }
+    window.addEventListener('rred-visit-counts', handleUpdate)
+    // Request visit counts in case content script loaded after React
+    window.dispatchEvent(new CustomEvent('rred-get-visit-counts'))
+    return () => window.removeEventListener('rred-visit-counts', handleUpdate)
+  }, [])
+
+  // Sort links by visit count (descending); fall back to original order if no data
+  const sortedLinks = useMemo(() => {
+    if (Object.keys(visitCounts).length === 0) return links
+    return [...links].sort(
+      (a, b) => (visitCounts[b.targetUrl] || 0) - (visitCounts[a.targetUrl] || 0),
+    )
+  }, [links, visitCounts])
 
   // Auto-open modal when initialAlias is set and workspaces are loaded
   useEffect(() => {
@@ -204,10 +230,10 @@ export default function LinksTable({ workspaceId, workspaces, showWorkspaceCol =
             </tr>
           </thead>
           <tbody>
-            {links.length === 0 && !loading && (
+            {sortedLinks.length === 0 && !loading && (
               <tr><td colSpan={showWorkspaceCol ? 6 : 5} className="empty">No links yet</td></tr>
             )}
-            {links.map((link) => (
+            {sortedLinks.map((link) => (
               <tr key={link.id}>
                 <td><code>r/{link.alias}</code></td>
                 <td style={{ maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

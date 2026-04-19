@@ -35,6 +35,22 @@ export function hasToken(): boolean {
   return !!localStorage.getItem('rred_token')
 }
 
+// Exchange a one-time auth code for a JWT. Returns the token or null on failure.
+export async function redeemAuthCode(code: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${API_URL}/auth/code/redeem`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    })
+    if (!res.ok) return null
+    const data = await res.json() as { token: string }
+    return data.token
+  } catch {
+    return null
+  }
+}
+
 export const api = {
   getMe: () => request<User>('/me'),
 

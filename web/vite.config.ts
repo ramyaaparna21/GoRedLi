@@ -5,11 +5,12 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/api': {
-        target: process.env.VITE_API_URL || 'http://localhost:8080',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
-      },
+      '/me': 'http://localhost:8080',
+      '/auth': 'http://localhost:8080',
+      '/workspaces': 'http://localhost:8080',
+      '/workspace-order': 'http://localhost:8080',
+      '/links': 'http://localhost:8080',
+      '/resolve': 'http://localhost:8080',
     },
   },
 })

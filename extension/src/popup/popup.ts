@@ -190,6 +190,9 @@ async function renderLoggedIn(email: string) {
   // Open r/main
   app.appendChild(el('button', { class: 'btn btn-secondary', id: 'open-admin' }, 'Open r/main'))
 
+  // Popular URLs
+  app.appendChild(el('button', { class: 'btn btn-secondary', id: 'popular-urls' }, 'Popular URLs'))
+
   // Sign out
   app.appendChild(el('button', { class: 'btn btn-link', id: 'sign-out' }, 'Sign out'))
 
@@ -218,6 +221,8 @@ async function renderLoggedIn(email: string) {
     if (result.ok) {
       showStatus(`Saved r/${alias}`, 'success')
       aliasInput.value = ''
+      // Refresh the local cache so the new link is available immediately
+      browser.runtime.sendMessage({ action: 'refreshCache' })
     } else {
       showStatus(result.error || 'Failed to save')
     }
@@ -251,16 +256,40 @@ async function renderLoggedIn(email: string) {
 
   document.getElementById('open-admin')!.addEventListener('click', openAdmin)
 
+  document.getElementById('popular-urls')!.addEventListener('click', async () => {
+    await browser.runtime.sendMessage({ action: 'openPopularUrls' })
+    window.close()
+  })
+
   document.getElementById('sign-out')!.addEventListener('click', async () => {
-    await browser.storage.local.remove('jwt')
+    await browser.storage.local.remove(['jwt', 'linksCache', 'aliasMap', 'visitCounts', 'cacheUpdatedAt'])
     renderLoggedOut()
   })
 }
 
+async function getAuthCode(jwt: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${API_URL}/auth/code`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${jwt}` },
+    })
+    if (!res.ok) return null
+    const { code } = await res.json() as { code: string }
+    return code
+  } catch {
+    return null
+  }
+}
+
 async function openAdmin() {
   const jwt = await getJWT()
-  // Pass the token in the URL so the web app can bootstrap its localStorage.
-  const url = jwt ? `${ADMIN_APP_URL}?token=${encodeURIComponent(jwt)}` : ADMIN_APP_URL
+  if (!jwt) {
+    browser.tabs.create({ url: ADMIN_APP_URL })
+    window.close()
+    return
+  }
+  const code = await getAuthCode(jwt)
+  const url = code ? `${ADMIN_APP_URL}?code=${encodeURIComponent(code)}` : ADMIN_APP_URL
   browser.tabs.create({ url })
   window.close()
 }

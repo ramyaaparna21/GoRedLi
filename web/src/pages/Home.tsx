@@ -44,13 +44,24 @@ export default function Home({ user: _user }: Props) {
     }
   }
 
+  function openPopularUrls() {
+    // Open the extension's Popular URLs page in a new tab.
+    // Navigate to r/popular-urls — the extension intercepts this and opens its page.
+    window.open('http://r/popular-urls', '_blank')
+  }
+
   return (
     <div className="page">
       <div className="page-header">
         <h1 className="page-title">rRed</h1>
-        <button className="btn btn-primary" onClick={() => navigate('/workspaces/new')}>
-          Add workspace
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-secondary" onClick={openPopularUrls}>
+            Popular URLs
+          </button>
+          <button className="btn btn-primary" onClick={() => navigate('/workspaces/new')}>
+            Add workspace
+          </button>
+        </div>
       </div>
 
       <div className="section">
