@@ -10,10 +10,10 @@ rRed has three user-facing surfaces:
 | Web admin (`r/main`) | React 18, Vite, TypeScript | S3 + CloudFront |
 | Backend API | Go 1.22, `net/http`, AWS Lambda | Lambda Function URL |
 
-All three talk to a single backend. Authentication uses **JWT** in both cases, but the transport differs:
+All three talk to a single backend. Authentication uses **JWT Bearer tokens** everywhere:
 
 - **Extension** — stores the JWT in `browser.storage.local` and sends it as `Authorization: Bearer <token>` on every request.
-- **Web admin** — receives the JWT from the extension via URL parameter, stores it in `localStorage` as `rred_token`, and sends it as `Authorization: Bearer <token>` on every request.
+- **Web admin** — receives the JWT from the extension via a one-time auth code (`?code=<auth-code>`), exchanges it for a JWT via `POST /auth/code/redeem`, stores it in `localStorage` as `rred_token`, and sends it as `Authorization: Bearer <token>` on every request.
 
 ---
 
@@ -21,41 +21,29 @@ All three talk to a single backend. Authentication uses **JWT** in both cases, b
 
 ```
 Internet
-    │
-    ▼
-┌───────────────────────────────────────────────────────────┐
-│  AWS (us-east-1, configurable)                            │
-│                                                           │
-│  CloudFront distribution                                  │
-│  (default cert, PriceClass_100, SPA 404→index.html)       │
-│      │                                                    │
-│      ▼                                                    │
-│  S3 bucket (private, OAC)                                 │
-│  rred-web-prod-<random>                                │
-│                                                           │
-│  Lambda Function URL (HTTPS)                              │
-│  rred-api-prod                                         │
-│  arm64, provided.al2023, 256 MB, 30 s timeout            │
-│      │                                                    │
-│  VPC 10.0.0.0/16                                          │
-│  ┌───────────────────────────────────────────────────┐    │
-│  │  Private subnets (10.0.1/2.0/24)                 │    │
-│  │      │                                            │    │
-│  │      ├─── RDS PostgreSQL 16 (db.t4g.micro)        │    │
-│  │      │    rred-prod                            │    │
-│  │      │    encrypted, 7-day backups                │    │
-│  │      │                                            │    │
-│  │  Public subnet (10.0.10.0/24)                     │    │
-│  │      │                                            │    │
-│  │      └─── NAT Gateway ──► Internet Gateway        │    │
-│  │           (Lambda needs outbound for Google OAuth) │    │
-│  └───────────────────────────────────────────────────┘    │
-└───────────────────────────────────────────────────────────┘
+    |
+    v
++-----------------------------------------------------------+
+|  AWS (us-east-1, configurable)                            |
+|                                                           |
+|  CloudFront distribution                                  |
+|  (default cert, PriceClass_100, SPA 404->index.html)     |
+|      |                                                    |
+|      v                                                    |
+|  S3 bucket (private, OAC)                                 |
+|  rred-web-prod-<random>                                   |
+|                                                           |
+|  Lambda Function URL (HTTPS)                              |
+|  rred-api-prod                                            |
+|  arm64, provided.al2023, 256 MB, 30 s timeout            |
+|      |                                                    |
+|      v                                                    |
+|  DynamoDB table (pay-per-request)                         |
+|  GoRedLi (single-table design)                            |
+|  GSI1 (membership lookups by user)                        |
+|  GSI2 (alias resolution)                                  |
++-----------------------------------------------------------+
 ```
-
-Security groups:
-- `rred-lambda` — egress-only (0.0.0.0/0 all ports)
-- `rred-db` — ingress TCP 5432 from `rred-lambda` only; not publicly accessible
 
 ---
 
@@ -65,66 +53,78 @@ Security groups:
 
 1. User opens the extension popup. `popup.ts` checks `browser.storage.local` for `jwt`; nothing found.
 2. Popup renders the "Sign in with Google" button.
-3. User clicks. Popup calls `browser.tabs.create({ url: API_URL + '/auth/google?from=extension' })` and closes itself.
-4. Backend `GET /auth/google` generates a random 16-byte state, prepends `"ext:"`, stores it in the `oauth_state` cookie (5-minute TTL, HttpOnly), and redirects the browser to Google's OAuth consent URL.
-5. User consents. Google redirects to `GET /auth/google/callback?state=...&code=...`.
-6. Backend validates `state` cookie, exchanges `code` for a Google token, calls `GET https://www.googleapis.com/oauth2/v2/userinfo`.
-7. `upsertUser` runs in a transaction:
-   - Inserts or updates the user row (upsert on `google_sub`).
-   - If this is the user's first sign-in (no `user_workspace_order` rows), creates a personal workspace named `"<name>'s workspace"`, inserts an `owner` membership, and inserts `priority_index = 0`.
-   - Updates any pre-signup `memberships` where `user_id IS NULL` and `email` matches.
-   - Inserts missing rows into `user_workspace_order` for newly linked workspaces, using `ROW_NUMBER()` to assign sequential `priority_index` values after the current max.
-8. Backend signs a JWT (HS256, 30-day expiry), sets it as the `rred_token` (localStorage), and — because `state` starts with `"ext:"` — redirects to `ADMIN_APP_URL/auth-success?token=<jwt>`.
-9. `background.ts` is watching `browser.tabs.onUpdated`. When it sees a tab URL that starts with `ADMIN_APP_URL + '/auth-success'`, it extracts `token` from the query string, stores it in `browser.storage.local` as `jwt`, and closes the tab.
-10. On next popup open, the JWT is found and the user is signed in.
+3. User clicks. Popup sends `{ action: 'startSignIn' }` to `background.ts` and closes.
+4. `background.ts` generates a PKCE verifier/challenge pair and a random state, stores them in `browser.storage.local` as `pendingAuth`, and opens a new tab to Google's OAuth consent URL with `code_challenge_method=S256`.
+5. User consents. Google redirects to `https://rred.me/auth/callback?state=...&code=...`.
+6. `background.ts` has a `webNavigation.onCompleted` listener filtered to `{ urlPrefix: https://rred.me/auth/callback }`. When the callback page finishes loading, the listener fires.
+7. The listener validates `state` matches `pendingAuth`, checks the 5-minute TTL, and closes the callback tab.
+8. The listener exchanges the authorization code for tokens via `POST https://oauth2.googleapis.com/token` using the PKCE `code_verifier`.
+9. The listener sends the Google ID token to `POST /auth/verify` on the backend.
+10. Backend `VerifyToken` handler verifies the Google ID token signature (via Google's JWKS public keys), checks the audience and issuer, then runs `UpsertUserOnLogin`:
+    - Inserts or updates the user (upsert on `google_sub`).
+    - If new user: creates a personal workspace named `"<name>'s workspace"` with an owner membership.
+    - Links any pre-signup memberships matching the user's email.
+    - Signs and returns a JWT (HS256, 30-day expiry).
+11. The listener stores the JWT in `browser.storage.local`.
+12. The listener triggers `refreshLinksCache()` to populate the local alias cache immediately, so `r/alias` redirects are instant from the first use.
+13. On next popup open, the JWT is found and `GET /me` succeeds — the user is signed in.
 
-### 2. First-time sign-in (web)
+### 2. Sign-in (web admin)
 
-Steps 1–7 are identical except `from=extension` is absent, so `state` has no `"ext:"` prefix.
+The web admin has no standalone sign-in flow. It always receives its JWT from the extension:
 
-After step 7, the backend redirects to `ADMIN_APP_URL` (the root of the web admin). The `rred_token` (localStorage) is already set. `App.tsx` calls `GET /me` on load; the cookie is sent automatically and the user is authenticated.
+1. Extension popup -> **Open r/main** -> extension calls `POST /auth/code` to create a short-lived one-time auth code -> opens `https://rred.me?code=<auth-code>`.
+2. `App.tsx` reads `?code=`, exchanges it for a JWT via `POST /auth/code/redeem`, saves the JWT to `localStorage`, and strips the code from the URL.
+3. `GET /me` is called with the Bearer token to verify and display the user.
+4. Legacy fallback: if `?token=<jwt>` is present (old extension versions), it is saved directly.
+
+> **Important: `/auth/callback` is reserved for Google OAuth.**
+> The Google OAuth flow redirects to `https://rred.me/auth/callback?code=<google-code>&state=...`. The `code` parameter on this path is a **Google authorization code**, NOT an rRed one-time auth code. `App.tsx` explicitly skips the auth code exchange when the path is `/auth/callback` — the extension's background script handles the Google code. Treating a Google code as an rRed code causes 400/401 errors on every sign-in.
 
 ### 3. r/alias resolution via extension
 
-1. User navigates to `http://r/wiki` in the browser.
-2. `background.ts` listener fires on `browser.webNavigation.onBeforeNavigate` filtered to `{ schemes: ['http'], hostEquals: 'go' }`.
+1. User navigates to `http://r/wiki` in the browser (or types `r/wiki` in the address bar, which is intercepted from search engines).
+2. `background.ts` has two `webNavigation.onBeforeNavigate` listeners:
+   - **Direct navigation**: filtered to `{ schemes: ['http'], hostEquals: 'r' }` — catches `http://r/wiki`.
+   - **Search engine fallback**: filtered to major search engines (Google, Bing, DuckDuckGo, Yahoo, Ecosia, Brave, Startpage, Perplexity) — catches when Chrome treats `r/wiki` as a search query.
 3. The main-frame check (`frameId === 0`) passes.
-4. Alias is extracted from the pathname: `wiki`.
-5. JWT is read from `browser.storage.local`.
-6. `background.ts` calls `GET /resolve?alias=wiki` with `Authorization: Bearer <jwt>`.
-7. Backend runs the resolution query (see [data-model.md](./data-model.md#resolution-query)).
-8. If found: `browser.tabs.update(tabId, { url: targetUrl })` — browser navigates to the real URL.
-9. If 401: JWT removed from storage; tab redirected to `ADMIN_APP_URL`.
-10. If 404: tab redirected to `ADMIN_APP_URL?token=<jwt>&notfound=wiki`. The web admin detects `?notfound=` and auto-opens the "Add link" modal with the alias pre-filled, so the user can immediately save a URL for the missing alias.
-11. If network error: tab redirected to `ADMIN_APP_URL`.
+4. Alias is extracted from the pathname (direct) or the `q` query parameter (search engine).
+5. The tab is redirected to the extension's `redirect/redirect.html?alias=wiki`.
+6. `redirect.ts` reads the JWT from `browser.storage.local` and checks the local `aliasMap` cache first (stored in `browser.storage.local`). If the alias is found in the cache, `window.location.href = targetUrl` fires immediately — no network request needed.
+7. On cache miss, `redirect.ts` calls `GET /resolve?alias=wiki` with `Authorization: Bearer <jwt>`.
+8. Backend runs the resolution logic: queries GSI2 for all links with the alias, filters by membership, picks the one from the highest-priority workspace.
+9. If found: `window.location.href = targetUrl` — browser navigates to the real URL.
+10. If 401: JWT removed from storage; redirects to `https://rred.me`.
+11. If 404: creates a one-time auth code via `POST /auth/code`, then redirects to `https://rred.me?code=<auth-code>&notfound=wiki`. The web admin exchanges the code for a JWT, detects `?notfound=` and auto-opens the "Add link" modal with the alias pre-filled.
+12. If network error: redirects to `https://rred.me`.
 
-### 4. r/main redirect (extension intercepting http://r/main)
+### 4. r/main redirect
 
 1. User navigates to `http://r/main` or `http://r/` (empty alias).
-2. `background.ts` checks if `alias === 'main'` or `alias === ''`.
-3. Immediately calls `browser.tabs.update(tabId, { url: ADMIN_APP_URL })` — no API call made.
+2. `redirect.ts` checks if `alias === 'main'` or `alias === ''`.
+3. Creates a one-time auth code via `POST /auth/code`, then redirects to `https://rred.me?code=<auth-code>` — no `GET /resolve` API call is made.
 
-The popup also handles `r/main` directly: if the alias input contains `main`, it opens `ADMIN_APP_URL` and closes the popup without calling the API.
+The popup also handles `r/main` directly: if the alias input contains `main`, it opens `https://rred.me` (with auth code) and closes the popup without calling the resolve API.
 
-### 6. Quick-save from the extension popup
+### 5. Quick-save from the extension popup
 
 1. User clicks the extension icon while on any page.
 2. Popup fetches the current tab's URL and title via `browser.tabs.query()`, and the user's workspaces via `GET /workspaces`.
 3. Popup displays the current page URL, a workspace selector (if multiple), and an alias input with a "Save page" button (primary) and a "Go" button (secondary).
-4. User types an alias (e.g. `wiki`) and clicks "Save page".
+4. User types an alias (e.g. `wiki`) and clicks "Save page" (or presses Enter).
 5. Popup calls `POST /workspaces/{wsId}/links` with the alias, current tab URL, and page title.
 6. On success, the status shows "Saved r/wiki" in green. On conflict (409), shows the error.
 
-### 5. Admin CRUD (web → backend → DB)
+### 6. Admin CRUD (web -> backend -> DynamoDB)
 
 Example: creating a new link.
 
 1. User fills out the link modal in `LinksTable` and clicks Save.
-2. `api.createLink(wsId, { alias, targetUrl, title })` calls `POST /workspaces/{id}/links` with `credentials: 'include'` (cookie).
-3. `AuthMiddleware` extracts the JWT from `rred_token` (localStorage), verifies it, injects `userID` and `userEmail` into context.
-4. `CreateLink` handler calls `requireMembership` — queries `memberships WHERE workspace_id = $1 AND user_id = $2`. 403 if not a member.
+2. `api.createLink(wsId, { alias, targetUrl, title })` calls `POST /workspaces/{id}/links` with `Authorization: Bearer <token>`.
+3. `AuthMiddleware` extracts the JWT from the `Authorization` header, verifies it, injects `userID` and `userEmail` into context.
+4. `CreateLink` handler calls `requireMembership` — queries GSI1 for the user's membership in the workspace. 403 if not a member.
 5. Validates that alias is not `"main"` (case-insensitive).
-6. Inserts into `go_links`. If the alias already exists in this workspace, the UNIQUE constraint fires and the handler returns 409.
+6. Creates the link item and an alias guard item in a DynamoDB transaction. If the alias already exists in this workspace, the conditional check fails and the handler returns 409.
 7. Returns the created `GoLink` as JSON (201).
 8. Web app closes the modal and refreshes the links table.
 
@@ -132,58 +132,131 @@ Example: creating a new link.
 
 ## Extension internals
 
+### Building the extension
+
+The extension requires four environment variables at build time. Without them, **the build will fail**:
+
+```bash
+cd extension
+cp .env.example .env   # then fill in real values
+npm run build
+```
+
+| Variable | Source | Purpose |
+|---|---|---|
+| `API_URL` | `terraform output api_url` | Lambda Function URL for all API calls |
+| `ADMIN_APP_URL` | `terraform output admin_app_url` | Web admin URL (`https://rred.me`) |
+| `GOOGLE_CLIENT_ID` | Google Cloud Console / terraform.tfvars | OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | Google Cloud Console | OAuth client secret |
+
+Webpack's `DefinePlugin` injects these as compile-time constants. The `.env` file is loaded automatically via `dotenv`. If the file is missing or a variable is unset, the build exits with an error listing the missing variables.
+
+> **Common issue**: running `npm run build` without a `.env` file silently used to produce an extension with placeholder URLs (`REPLACE_WITH_API_URL`, etc.), causing 400 errors on every sign-in attempt. The build now fails fast instead.
+
+After building, reload the extension in `chrome://extensions` (click the refresh icon on the rRed card) to pick up the new `dist/` files.
+
 ### Manifest V3 architecture
 
-The extension has two scripts compiled by Webpack into `dist/`:
+The extension has five scripts compiled by Webpack into `dist/`:
 
 | File | Type | Purpose |
 |---|---|---|
-| `background.js` | Service worker | Navigation interception, OAuth token capture, message listener |
+| `background.js` | Service worker | Navigation interception, OAuth PKCE flow, links cache, message listener |
 | `popup.js` | Browser action popup | Sign-in / sign-out, save current page as rlink, go-to-alias |
-| `redirect.js` | Intermediate page | Resolves alias via API, redirects to target or admin app |
+| `redirect.js` | Intermediate page | Resolves alias via local cache (then API fallback), redirects to target or admin app |
+| `popular.js` | Extension page | Shows most-visited URLs without rRed aliases; lets user add redirects |
+| `content.js` | Content script | Bridges visit count data from extension to the web admin via localStorage + CustomEvent |
 
-All three scripts use `webextension-polyfill` so the same TypeScript source targets both Chrome (`chrome.*`) and Firefox (`browser.*`). The Firefox build is triggered with `BROWSER=firefox npm run build` (the polyfill handles the difference at runtime; no source changes are needed).
+All five scripts use `webextension-polyfill` so the same TypeScript source targets both Chrome (`chrome.*`) and Firefox (`browser.*`). The Firefox build is triggered with `BROWSER=firefox npm run build` (the polyfill handles the difference at runtime; no source changes are needed).
 
-Build-time constants `__API_URL__` and `__ADMIN_APP_URL__` are injected by Webpack's `DefinePlugin` from the `API_URL` and `ADMIN_APP_URL` environment variables respectively.
+Build-time constants `__API_URL__`, `__ADMIN_APP_URL__`, `__GOOGLE_CLIENT_ID__`, and `__GOOGLE_CLIENT_SECRET__` are injected by Webpack's `DefinePlugin` from environment variables.
 
-### How http://r/* navigation interception works
+### How r/ navigation interception works
 
-`background.ts` registers a listener on `browser.webNavigation.onBeforeNavigate` with the filter `{ url: [{ schemes: ['http'], hostEquals: 'go' }] }`. This fires before the browser sends any HTTP request to `http://go`, so the internal hostname never actually resolves — the extension intercepts at the navigation layer and redirects the tab to either the resolved target URL or the admin app.
+`background.ts` registers two `webNavigation.onBeforeNavigate` listeners:
 
-Only main-frame navigations are handled (`details.frameId !== 0` is skipped) to avoid reacting to iframes loading `http://go` resources.
+1. **Direct navigation**: filtered to `{ schemes: ['http'], hostEquals: 'r' }`. This fires when the user has `/etc/hosts` configured to resolve `r` to `127.0.0.1`, so `http://r/wiki` is a valid navigation.
+
+2. **Search engine fallback**: filtered to major search engines (Google, Bing, DuckDuckGo, Yahoo, Ecosia, Brave, Startpage, Perplexity). When Chrome doesn't recognize `r/wiki` as a URL and sends it to a search engine, the extension intercepts the search navigation, extracts the `r/alias` from the query parameter, and redirects before the search page loads.
+
+Both listeners redirect the tab to the extension's own `redirect/redirect.html?alias=<alias>` page, which handles the API call and final redirect. The special alias `popular-urls` is intercepted directly and opens the extension's Popular URLs page instead of going through the redirect flow.
+
+Only main-frame navigations are handled (`details.frameId !== 0` is skipped) to avoid reacting to iframes.
 
 ### How the OAuth token is captured after sign-in
 
-The backend redirects to `ADMIN_APP_URL/auth-success?token=<jwt>` when `from=extension` is present. `background.ts` listens on `browser.tabs.onUpdated`. For every tab update it checks `tab.url.startsWith(ADMIN_APP_URL + '/auth-success')`. When matched, it reads `token` from the query string, saves it to `browser.storage.local`, and closes the tab.
+The extension uses a full PKCE (Proof Key for Code Exchange) OAuth flow:
 
-This approach avoids needing a native messaging host or any special extension API: the token travels via a standard redirect URL that the extension already has `host_permissions` for (`https://*.cloudfront.net/*`).
+1. `background.ts` generates a random verifier and computes the S256 challenge.
+2. The verifier, state, and timestamp are persisted in `browser.storage.local` (survives service worker suspension in MV3).
+3. A new tab opens to Google's OAuth consent URL with the challenge.
+4. Google redirects to `https://rred.me/auth/callback?code=...&state=...`.
+5. `background.ts` has a `webNavigation.onCompleted` listener with a declarative URL filter `{ urlPrefix: REDIRECT_URI }`. This reliably wakes Firefox MV3 event pages.
+6. The listener validates the state, exchanges the code for tokens (including `code_verifier`), sends the ID token to the backend, and stores the returned JWT.
 
 ### Cross-browser support
 
 The `webextension-polyfill` package wraps Chrome's callback-based `chrome.*` APIs in Promises and maps them to the `browser.*` namespace, matching Firefox's native API shape. Because the code is written against `browser.*` throughout, it runs identically on both browsers. The `browser_specific_settings.gecko` block in `manifest.json` provides Firefox with the required extension ID and minimum version (109.0, which is the first Firefox version with full MV3 support).
 
+### Local links cache
+
+The extension maintains a local cache of all the user's links in `browser.storage.local` to enable instant `r/alias` redirects without a network round-trip.
+
+**Stored keys**:
+
+| Key | Type | Description |
+|---|---|---|
+| `linksCache` | `CachedLink[]` | All links across all workspaces |
+| `aliasMap` | `Record<string, string>` | Alias → target URL map (respects workspace priority) |
+| `visitCounts` | `Record<string, number>` | Browser history visit counts for link target URLs (90-day window) |
+| `cacheUpdatedAt` | `number` | `Date.now()` timestamp of last refresh |
+
+**When the cache is refreshed** (`refreshLinksCache()` in `background.ts`):
+
+1. **On extension startup** — the background service worker calls `refreshLinksCache()` immediately.
+2. **Every 5 minutes** — via a `browser.alarms` periodic alarm.
+3. **After sign-in** — triggered immediately after the JWT is stored, so new users get instant redirects from their first `r/alias` use.
+4. **After creating a link** — both the popup and popular page send `{ action: 'refreshCache' }` to the background after a successful link creation.
+
+**Cache refresh process**:
+
+1. Fetch all links (paginated) via `GET /links`.
+2. Fetch all workspaces via `GET /workspaces` (returned in priority order).
+3. Build `aliasMap`: sort links by workspace priority, first alias wins (highest-priority workspace).
+4. Build `visitCounts`: query `browser.history.search` for the last 90 days, match against link target URLs.
+5. Store everything in `browser.storage.local`.
+
+**How redirect.ts uses the cache**:
+
+1. Read `aliasMap` from `browser.storage.local`.
+2. If the alias exists in the map → instant redirect (`window.location.href`), no API call.
+3. If cache miss → fall back to `GET /resolve?alias=...` API call.
+
+**Cache cleanup on sign-out**:
+
+When the user signs out, all cached data (`linksCache`, `aliasMap`, `visitCounts`, `cacheUpdatedAt`) is removed alongside the JWT to prevent stale data from persisting.
+
 ---
 
 ## Authentication
 
-### Google OAuth 2.0 flow in detail
+### Google OAuth 2.0 PKCE flow in detail
 
-1. `GET /auth/google[?from=extension]`
-   - Generates a 16-byte random state, base64url-encoded.
-   - If `from=extension`, prepends `"ext:"` to the state string.
-   - Sets `oauth_state` cookie: HttpOnly, Secure, SameSiteLax, 5-minute TTL.
-   - Redirects to `https://accounts.google.com/o/oauth2/auth` with scopes `openid`, `userinfo.email`, `userinfo.profile`.
-
-2. Google redirects to `GET /auth/google/callback?state=...&code=...`
-   - Validates `state` matches the `oauth_state` cookie; returns 400 if not.
-   - Clears the `oauth_state` cookie (MaxAge: -1).
-   - Exchanges `code` for a Google token via `oauth2.Config.Exchange`.
-   - Calls `GET https://www.googleapis.com/oauth2/v2/userinfo` to get `id` (sub), `email`, `name`, `picture`.
-   - Calls `upsertUser` (see First sign-in logic below).
-   - Signs a JWT.
-   - Sets `rred_token` (localStorage): HttpOnly, Secure, SameSiteLax, 30-day TTL.
-   - If extension flow: redirects to `ADMIN_APP_URL/auth-success?token=<jwt>`.
-   - If web flow: redirects to `ADMIN_APP_URL`.
+1. Extension popup sends `{ action: 'startSignIn' }` to background.
+2. `background.ts` generates:
+   - A 32-byte random verifier (base64url-encoded).
+   - An S256 challenge: `SHA-256(verifier)` base64url-encoded.
+   - A random state string.
+3. Persists `{ verifier, state, timestamp }` in `browser.storage.local` as `pendingAuth`.
+4. Opens a new tab to `https://accounts.google.com/o/oauth2/v2/auth` with `code_challenge`, `code_challenge_method=S256`, `state`, `redirect_uri=https://rred.me/auth/callback`, `scope=openid email profile`, `prompt=select_account`.
+5. User consents. Google redirects to the callback URL.
+6. `background.ts` `onCompleted` listener fires, validates state, checks 5-minute TTL.
+7. Exchanges code for tokens at `https://oauth2.googleapis.com/token` with `code_verifier`.
+8. Sends the `id_token` to `POST API_URL/auth/verify`.
+9. Backend verifies the ID token using Google's JWKS public keys (cached for 1 hour), checks audience matches `GOOGLE_CLIENT_ID` and issuer is `accounts.google.com`.
+10. Backend upserts the user, creates personal workspace if new, links pre-signup memberships.
+11. Backend signs and returns a JWT.
+12. Extension stores JWT in `browser.storage.local`.
 
 ### JWT structure
 
@@ -191,98 +264,56 @@ Algorithm: HS256, signed with the `JWT_SECRET` environment variable.
 
 | Claim | Value |
 |---|---|
-| `sub` | User UUID (`users.id`) |
+| `sub` | User UUID |
 | `email` | User's Google email |
 | `iat` | Issued-at timestamp |
 | `exp` | Issued-at + 30 days |
 
 The `JWTAuth.Verify` method rejects tokens with unexpected signing methods (prevents algorithm confusion attacks).
 
-### How the extension uses Bearer tokens vs web using cookies
-
-The `AuthMiddleware` in `internal/middleware/auth.go` checks for a token in this order:
-
-1. `Authorization: Bearer <token>` header — used by the extension.
-2. `rred_token` (localStorage) — used by the web admin.
-
-If neither is present or the token is invalid, it returns `{"error":"unauthorized"}` with 401.
-
-The web admin sends all requests with `credentials: 'include'` so the cookie is always transmitted. The extension sends `Authorization: Bearer <jwt>` explicitly on every API call (both in `background.ts` and `popup.ts`).
-
-### Extension sign-in flow detail
-
-1. Popup opens tab to `API_URL/auth/google?from=extension`.
-2. Backend stores `"ext:" + randomState` in `oauth_state` cookie.
-3. Google OAuth completes; backend detects `"ext:"` prefix in cookie.
-4. Backend redirects to `ADMIN_APP_URL/auth-success?token=<jwt>`.
-5. `background.ts` catches the tab update, reads `token`, stores in `browser.storage.local`.
-6. Tab is closed.
-7. Next popup open: JWT found, `GET /me` called with Bearer token, user displayed.
-
 ---
 
 ## Resolution logic
 
-The resolution query is the core of the redirects feature:
+The resolution flow in `store.ResolveAlias`:
 
-```sql
-SELECT gl.target_url
-FROM go_links gl
-JOIN user_workspace_order uwo ON uwo.workspace_id = gl.workspace_id
-JOIN memberships m ON m.workspace_id = gl.workspace_id AND m.user_id = $1
-WHERE uwo.user_id = $1 AND gl.alias = $2
-ORDER BY uwo.priority_index ASC
-LIMIT 1
-```
+1. Fetch the user to get their `workspaceOrder` list.
+2. Query GSI2 (`ALIAS#<alias>`) to find all link items with this alias across all workspaces.
+3. Filter to only workspaces the user is a member of (present in `workspaceOrder`).
+4. Sort by workspace priority (index in `workspaceOrder` — lower index = higher priority).
+5. Return the target URL from the highest-priority workspace.
 
-This single query enforces three things simultaneously:
-
-1. **Membership check** — the `JOIN memberships` ensures only links from workspaces the user belongs to are considered.
-2. **Priority ordering** — `ORDER BY uwo.priority_index ASC` means if the same alias exists in multiple workspaces, the workspace with the lowest `priority_index` (highest priority) wins.
-3. **Efficiency** — `LIMIT 1` stops after finding the best match.
+This ensures:
+1. **Membership check** — only links from workspaces the user belongs to are considered.
+2. **Priority ordering** — if the same alias exists in multiple workspaces, the workspace with the lowest index (highest priority) wins.
 
 ### Workspace priority order
 
-Each user has a personal ordering stored in `user_workspace_order (user_id, workspace_id, priority_index)`. Lower `priority_index` = higher priority. The user controls this order via the drag-and-drop workspace table in the web admin, which calls `PATCH /workspace-order` with the full ordered list of workspace IDs. The backend rewrites all `priority_index` values in a transaction.
+Each user has a personal ordering stored as `workspaceOrder` (a list attribute on the user item in DynamoDB). Lower index = higher priority. The user controls this order via the drag-and-drop workspace table in the web admin, which calls `PATCH /workspace-order` with the full ordered list of workspace IDs.
 
-On first sign-in, the personal workspace gets `priority_index = 0`. Each subsequently created or linked workspace gets `MAX(priority_index) + 1` (or `ROW_NUMBER()` offset from the current max when multiple workspaces are linked at once).
+On first sign-in, the personal workspace is the only entry. Each subsequently created or linked workspace is appended to the end of the list.
 
 ---
 
 ## First sign-in logic
 
-`upsertUser` runs inside a single database transaction and handles four cases:
+`UpsertUserOnLogin` handles four cases:
 
 **Case 1: Returning user**
-The `INSERT ... ON CONFLICT (google_sub) DO UPDATE` brings `email`, `name`, and `avatar_url` up to date (handles Google account changes). No workspace is created.
+The existing user's `email`, `name`, and `avatarUrl` are updated to reflect any Google account changes.
 
 **Case 2: Brand new user**
-`SELECT COUNT(*) FROM user_workspace_order WHERE user_id = $1` returns 0. The transaction:
-1. Creates a workspace named `"<user.Name>'s workspace"`.
-2. Inserts an `owner` membership for the user.
-3. Inserts `user_workspace_order` with `priority_index = 0`.
+A DynamoDB transaction creates:
+1. The user item (`USER#<id>`).
+2. A Google sub lookup item (`GSUB#<sub>`) pointing to the user.
+3. An email lookup item (`EMAIL#<email>`) pointing to the user.
+4. A personal workspace (`WS#<id>` / `META`) named `"<name>'s workspace"`.
+5. An owner membership for the user in that workspace.
 
 **Case 3: Pre-signup memberships exist**
-An admin can add a user's email to a workspace before that user signs up. `memberships.user_id` is nullable for this purpose. On sign-in:
-```sql
-UPDATE memberships SET user_id = $1 WHERE email = $2 AND user_id IS NULL
-```
-This links all pending memberships to the new user ID.
+After creating/updating the user, `linkPreSignupMemberships` queries GSI1 for memberships with `PMEM#<email>` (pre-signup marker). For each found:
+- Updates the membership to set `userId` and change GSI1PK from `PMEM#<email>` to `UMEM#<userId>`.
+- Appends the workspace ID to the user's `workspaceOrder`.
 
-**Case 4: Newly linked workspaces need ordering**
-After linking pre-signup memberships, any workspace not yet in `user_workspace_order` is inserted with sequential `priority_index` values using:
-```sql
-INSERT INTO user_workspace_order (user_id, workspace_id, priority_index)
-SELECT $1, workspace_id,
-       COALESCE((SELECT MAX(priority_index) FROM user_workspace_order WHERE user_id = $1), -1)
-         + ROW_NUMBER() OVER ()
-FROM memberships
-WHERE user_id = $1
-  AND workspace_id NOT IN (
-      SELECT workspace_id FROM user_workspace_order WHERE user_id = $1
-  )
-ON CONFLICT DO NOTHING
-```
-`ROW_NUMBER() OVER ()` ensures each newly linked workspace gets a distinct index (max+1, max+2, ...) even if multiple workspaces are linked simultaneously. `ON CONFLICT DO NOTHING` makes the statement idempotent.
-
-Cases 2, 3, and 4 all run on every sign-in (not just first sign-in), so they are safe to re-run. Case 2's body is gated by the `orderCount == 0` check so the personal workspace is only created once.
+**Case 4: Returning user with new pre-signup memberships**
+Same as case 3 — runs on every sign-in so newly invited workspaces are linked on next login.

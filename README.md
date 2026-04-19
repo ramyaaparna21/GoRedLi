@@ -12,7 +12,7 @@ rRed is a self-hosted redirect system: type `http://r/alias` in your browser and
 │                                                                     │
 │  ┌──────────────────────┐      ┌──────────────────────────────────┐ │
 │  │  Extension           │      │  Web admin (CloudFront + S3)     │ │
-│  │  (background.js)     │      │  https://<dist>.cloudfront.net   │ │
+│  │  (background.js)     │      │  https://rred.me                 │ │
 │  │                      │      │                                  │ │
 │  │  Intercepts          │      │  React SPA — manage workspaces,  │ │
 │  │  http://r/*          │      │  links, and members              │ │

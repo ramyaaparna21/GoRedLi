@@ -5,7 +5,7 @@ output "api_url" {
 
 output "admin_app_url" {
   description = "Admin web app URL (set as ADMIN_APP_URL in extension build)"
-  value       = "https://${module.frontend.cloudfront_domain}"
+  value       = var.domain_name != "" ? "https://${var.domain_name}" : "https://${module.frontend.cloudfront_domain}"
 }
 
 output "s3_bucket" {

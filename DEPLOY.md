@@ -7,8 +7,8 @@ All Google OAuth is handled **client-side in the extension** using PKCE:
 2. Extension exchanges code for Google ID token via `https://oauth2.googleapis.com/token`
 3. Extension sends ID token to `POST /auth/verify` → backend verifies signature using cached Google JWKS → returns a JWT
 4. Extension stores the JWT in `browser.storage.local`
-5. When opening `r/main`, extension appends `?token=<jwt>` to the admin URL
-6. Web app reads the token from the URL, stores it in `localStorage`, uses it as a Bearer token
+5. When opening `r/main`, extension creates a one-time auth code via `POST /auth/code`, then opens `https://rred.me?code=<auth-code>`
+6. Web app exchanges the code for a JWT via `POST /auth/code/redeem`, stores it in `localStorage`, uses it as a Bearer token
 
 There is no server-side OAuth redirect flow. No cookies.
 
@@ -28,7 +28,7 @@ There is no server-side OAuth redirect flow. No cookies.
 
 1. Go to [console.cloud.google.com](https://console.cloud.google.com) → APIs & Services → Credentials
 2. Create an **OAuth 2.0 Client ID** — type: **Web application**
-3. Add your admin app URL (CloudFront URL) to **Authorized redirect URIs**
+3. Add `https://rred.me/auth/callback` to **Authorized redirect URIs**
 4. Note the **Client ID** and **Client secret**
 
 ---
@@ -44,13 +44,21 @@ terraform init
 terraform apply
 ```
 
+Add to your `terraform.tfvars`:
+```hcl
+domain_name     = "rred.me"
+certificate_arn = "arn:aws:acm:us-east-1:ACCOUNT:certificate/CERT-ID"
+```
+
 Note the outputs:
 ```
 api_url                    = "https://xxxx.lambda-url.us-east-1.on.aws/"
-admin_app_url              = "https://xxxx.cloudfront.net"
+admin_app_url              = "https://rred.me"
 s3_bucket                  = "rred-web-prod-xxxx"
 cloudfront_distribution_id = "EXXXX"
 ```
+
+After `terraform apply`, create a CNAME (or alias) DNS record pointing `rred.me` to the CloudFront distribution domain name.
 
 ---
 
@@ -60,8 +68,8 @@ cloudfront_distribution_id = "EXXXX"
 cd extension
 npm install
 
-API_URL=https://xxxx.lambda-url.us-east-1.on.aws \
-ADMIN_APP_URL=https://xxxx.cloudfront.net \
+API_URL=https://api.rred.me \
+ADMIN_APP_URL=https://rred.me \
 GOOGLE_CLIENT_ID=xxxx.apps.googleusercontent.com \
 GOOGLE_CLIENT_SECRET=GOCSPX-xxxx \
 npm run build
@@ -102,7 +110,7 @@ aws lambda update-function-code \
 cd web
 npm install
 
-VITE_API_URL=https://xxxx.lambda-url.us-east-1.on.aws npm run build
+VITE_API_URL=https://api.rred.me npm run build
 
 aws s3 sync dist/ s3://rred-web-prod-xxxx/ --delete
 

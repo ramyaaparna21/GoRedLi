@@ -11,23 +11,25 @@ This document describes every user-facing flow in rRed. Use it as a test plan an
 1. Open the rRed extension popup.
 2. Click **Sign in with Google**.
 3. A new tab opens with Google's OAuth consent screen.
-4. Authorize. Google redirects to the CloudFront callback URL.
+4. Authorize. Google redirects to `https://rred.me/auth/callback`.
 5. `background.ts` intercepts the callback, exchanges the code for an ID token via PKCE, sends it to `POST /auth/verify`, and stores the returned JWT in `browser.storage.local`.
-6. The callback tab closes automatically.
-7. On next popup open, the JWT is found and the user's email is displayed.
+6. `background.ts` immediately refreshes the local links cache so `r/alias` redirects work instantly from the first use.
+7. The callback tab closes automatically.
+8. On next popup open, the JWT is found and the user's email is displayed.
 
 ### 2. Sign in (web admin)
 
 The web admin has no standalone sign-in flow. It receives its JWT from the extension:
-- Extension popup → **Open r/main** → opens `ADMIN_APP_URL?token=<jwt>`.
-- `App.tsx` reads `?token=`, saves it to `localStorage`, and strips it from the URL.
+- Extension popup → **Open r/main** → extension creates a one-time auth code via `POST /auth/code` → opens `https://rred.me?code=<auth-code>`.
+- `App.tsx` reads `?code=`, exchanges it for a JWT via `POST /auth/code/redeem`, saves the JWT to `localStorage`, and strips the code from the URL.
 - `GET /me` is called to verify the token and display the user.
+- Note: `App.tsx` skips auth code exchange on the `/auth/callback` path, which is reserved for Google OAuth redirects (see Architecture docs).
 
 ### 3. Sign out (extension popup)
 
 1. Open the popup.
 2. Click **Sign out** at the bottom.
-3. JWT is removed from `browser.storage.local`.
+3. JWT and all cached data (links cache, alias map, visit counts) are removed from `browser.storage.local`.
 4. Popup re-renders with the "Sign in with Google" button.
 
 ### 4. Sign out (web admin)
@@ -46,8 +48,8 @@ The web admin has no standalone sign-in flow. It receives its JWT from the exten
 2. Chrome either navigates to `http://r/wiki` (if `/etc/hosts` is configured) or sends it to a search engine.
 3. The extension intercepts via `webNavigation.onBeforeNavigate` (direct) or search-engine URL matching (fallback).
 4. The tab is redirected to the extension's `redirect.html?alias=wiki`.
-5. `redirect.ts` reads the JWT from storage, calls `GET /resolve?alias=wiki`.
-6. API returns 200 with `{ targetUrl }`.
+5. `redirect.ts` reads the JWT from storage, then checks the local `aliasMap` cache. If found, the browser navigates to the target URL immediately (no network request).
+6. On cache miss, `redirect.ts` calls `GET /resolve?alias=wiki`. API returns 200 with `{ targetUrl }`.
 7. Browser navigates to the target URL.
 
 ### 6. Navigate to r/alias (alias does not exist)
@@ -55,8 +57,8 @@ The web admin has no standalone sign-in flow. It receives its JWT from the exten
 1. Type `r/newpage` in the address bar.
 2. Extension intercepts and redirects to `redirect.html?alias=newpage`.
 3. `redirect.ts` calls `GET /resolve?alias=newpage` → 404.
-4. Browser redirects to `ADMIN_APP_URL?token=<jwt>&notfound=newpage`.
-5. `App.tsx` strips the token, navigates to `/?notfound=newpage`.
+4. `redirect.ts` creates a one-time auth code via `POST /auth/code`, then redirects to `https://rred.me?code=<auth-code>&notfound=newpage`.
+5. `App.tsx` exchanges the code for a JWT via `POST /auth/code/redeem`, saves the JWT, and navigates to `/?notfound=newpage`.
 6. `Home.tsx` reads `?notfound=newpage`, passes it to `LinksTable` as `initialAlias`.
 7. The "Create r/newpage" modal auto-opens with the alias pre-filled and the Target URL field focused.
 8. The `?notfound=` param is cleaned from the URL.
@@ -66,21 +68,27 @@ The web admin has no standalone sign-in flow. It receives its JWT from the exten
 1. Type `r/main` or `r/` in the address bar.
 2. Extension intercepts, redirects to `redirect.html?alias=main` (or empty).
 3. `redirect.ts` detects `alias === 'main'` or empty.
-4. Browser redirects to the admin app — no API call is made.
+4. `redirect.ts` creates a one-time auth code via `POST /auth/code`, then redirects to `https://rred.me?code=<auth-code>` — no `GET /resolve` call is made.
+
+### 7b. Navigate to r/popular-urls
+
+1. Type `r/popular-urls` in the address bar.
+2. Extension intercepts via `webNavigation.onBeforeNavigate`.
+3. The special alias `popular-urls` is detected and the tab is redirected to the extension's built-in Popular URLs page (`popular/popular.html`) instead of the normal redirect flow.
 
 ### 8. Navigate to r/alias (not signed in)
 
 1. Type `r/anything` in the address bar.
 2. Extension intercepts, redirects to `redirect.html?alias=anything`.
 3. `redirect.ts` finds no JWT in storage.
-4. Browser redirects to `ADMIN_APP_URL` (the "Open from extension" page).
+4. Browser redirects to `https://rred.me` (the "Open from extension" page).
 
 ### 9. Navigate to r/alias (expired JWT)
 
 1. Type `r/anything`.
 2. `redirect.ts` calls `GET /resolve` → 401.
 3. JWT is removed from storage.
-4. Browser redirects to `ADMIN_APP_URL`.
+4. Browser redirects to `https://rred.me`.
 
 ---
 
@@ -93,7 +101,7 @@ The web admin has no standalone sign-in flow. It receives its JWT from the exten
 3. Select a workspace from the dropdown (if you have multiple).
 4. Type an alias in the `r/` input field.
 5. Click **Save page** (or press Enter).
-6. On success: status shows "Saved r/alias" in green. The alias input clears.
+6. On success: status shows "Saved r/alias" in green. The alias input clears. The local links cache is refreshed in the background so the new alias is instantly available.
 7. On conflict (alias already exists): error message shown.
 
 ### 11. Go to an alias from the popup
@@ -110,7 +118,7 @@ The web admin has no standalone sign-in flow. It receives its JWT from the exten
 
 1. Open the popup.
 2. Click **Open r/main**.
-3. A new tab opens at `ADMIN_APP_URL?token=<jwt>`.
+3. The popup creates a one-time auth code via `POST /auth/code`, then opens a new tab at `https://rred.me?code=<auth-code>`.
 4. The popup closes.
 
 ---
@@ -212,3 +220,29 @@ The web admin has no standalone sign-in flow. It receives its JWT from the exten
 2. A browser confirm dialog asks "Remove email@example.com?".
 3. Click OK to confirm.
 4. The member is removed from the table.
+
+---
+
+## Popular URLs (extension page)
+
+### 27. Open Popular URLs page
+
+1. Open the extension popup.
+2. Click **Popular URLs**.
+3. A new tab opens with the Popular URLs extension page.
+
+Alternatively, navigate to `r/popular-urls` in the address bar.
+
+### 28. Browse popular URLs
+
+1. The page queries browser history (default: last 30 days, up to 5000 entries) and lists URLs sorted by visit count.
+2. URLs that already have rRed aliases are filtered out.
+3. Change the "days" input to adjust the time window (1–365). The table updates after a 500ms debounce.
+
+### 29. Add a redirect from Popular URLs
+
+1. On a URL row, type an alias in the `r/alias` input field.
+2. Select a target workspace from the dropdown at the top.
+3. Click **Add** (or press Enter).
+4. On success: the row fades out. The local links cache is refreshed in the background.
+5. On error: the error message appears next to the button.

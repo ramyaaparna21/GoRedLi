@@ -19,3 +19,15 @@ variable "jwt_secret" {
   type        = string
   sensitive   = true
 }
+
+variable "domain_name" {
+  description = "Custom domain for the web admin (e.g. rred.me). Leave empty to use the CloudFront default domain."
+  type        = string
+  default     = ""
+}
+
+variable "certificate_arn" {
+  description = "ACM certificate ARN for the custom domain (must be in us-east-1). Required if domain_name is set."
+  type        = string
+  default     = ""
+}

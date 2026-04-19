@@ -1,4 +1,14 @@
 variable "environment" {}
+variable "domain_name" {
+  description = "Custom domain for the web admin (e.g. rred.me)"
+  type        = string
+  default     = ""
+}
+variable "certificate_arn" {
+  description = "ACM certificate ARN for the custom domain (must be in us-east-1)"
+  type        = string
+  default     = ""
+}
 
 resource "aws_s3_bucket" "web" {
   bucket        = "goredli-web-${var.environment}-${random_id.suffix.hex}"
@@ -28,6 +38,7 @@ resource "aws_cloudfront_distribution" "web" {
   enabled             = true
   default_root_object = "index.html"
   price_class         = "PriceClass_100"
+  aliases             = var.domain_name != "" ? [var.domain_name] : []
 
   origin {
     domain_name              = aws_s3_bucket.web.bucket_regional_domain_name
@@ -72,7 +83,10 @@ resource "aws_cloudfront_distribution" "web" {
   }
 
   viewer_certificate {
-    cloudfront_default_certificate = true
+    cloudfront_default_certificate = var.certificate_arn == "" ? true : false
+    acm_certificate_arn            = var.certificate_arn != "" ? var.certificate_arn : null
+    ssl_support_method             = var.certificate_arn != "" ? "sni-only" : null
+    minimum_protocol_version       = var.certificate_arn != "" ? "TLSv1.2_2021" : null
   }
 
   tags = { Name = "goredli-web-${var.environment}" }

@@ -1,17 +1,19 @@
 {
   "manifest_version": 3,
   "name": "rRed — Redirects for your team",
-  "version": "1.1.0",
+  "version": "1.3.0",
   "description": "Create short redirects (r/alias) that resolve to real URLs. Organize redirects in workspaces with your team.",
   "permissions": [
     "storage",
     "tabs",
-    "webNavigation"
+    "webNavigation",
+    "history",
+    "alarms"
   ],
   "host_permissions": [
     "http://r/*",
-    "https://*.cloudfront.net/*",
-    "https://5y6ipnxedldrokeygz3ylosjyu0wbrpf.lambda-url.us-east-1.on.aws/*",
+    "https://rred.me/*",
+    "https://api.rred.me/*",
     "https://oauth2.googleapis.com/*",
     "https://accounts.google.com/*"
   ],
@@ -20,6 +22,15 @@
     "32": "icons/icon32.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+1",
+        "mac": "Command+Shift+1"
+      },
+      "description": "Open rRed popup"
+    }
   },
   "background": {
     "service_worker": "background.js"
@@ -32,6 +43,17 @@
       "32": "icons/icon32.png",
       "48": "icons/icon48.png"
     }
+  },
+  "content_scripts": [{
+    "matches": ["https://rred.me/*", "http://localhost/*"],
+    "js": ["content.js"],
+    "run_at": "document_idle"
+  }],
+  "externally_connectable": {
+    "matches": [
+      "https://rred.me/*",
+      "http://localhost:*/*"
+    ]
   },
   "browser_specific_settings": {
     "gecko": {

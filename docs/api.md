@@ -2,17 +2,27 @@
 
 ## Base URL
 
-- **Production**: Lambda Function URL — `https://<id>.lambda-url.<region>.on.aws`
+- **Production**: `https://api.rred.me` (custom domain fronting the Lambda Function URL)
 - **Local dev**: `http://localhost:8080`
 
 ---
 
 ## Authentication
 
-All protected endpoints accept the JWT in one of two ways (checked in this order):
+All protected endpoints require a JWT in the `Authorization` header:
 
-1. `Authorization: Bearer <token>` header — used by the extension.
-2. `rred_token` HTTP-only cookie — set by the backend after sign-in, used by the web admin.
+```
+Authorization: Bearer <token>
+```
+
+The JWT is obtained through the extension's OAuth PKCE flow:
+1. Extension initiates Google OAuth with PKCE (S256 challenge).
+2. Google redirects to the callback URL (`https://rred.me/auth/callback`) with an authorization code.
+3. Extension exchanges the code for a Google ID token.
+4. Extension sends the ID token to `POST /auth/verify`.
+5. Backend verifies the token and returns a signed JWT.
+
+The web admin receives its JWT from the extension via a one-time auth code: the extension calls `POST /auth/code` to create a short-lived code, opens `ADMIN_APP_URL?code=<auth-code>`, and the web app exchanges it for a JWT via `POST /auth/code/redeem`. The JWT is stored in `localStorage`.
 
 Unauthenticated requests to protected endpoints receive:
 
@@ -28,14 +38,13 @@ HTTP 401.
 The `corsMiddleware` in `internal/server/server.go` handles CORS before any route handler runs.
 
 **Allowed origins**:
-- All origins listed in the `ALLOWED_ORIGINS` environment variable (comma-separated). In production this is the CloudFront URL.
+- All origins listed in the `ALLOWED_ORIGINS` environment variable (comma-separated). In production this is `https://rred.me`.
 - Any origin with scheme `chrome-extension://` (Chrome extension).
 - Any origin with scheme `moz-extension://` (Firefox extension).
 
 **Headers set on allowed origins**:
 ```
 Access-Control-Allow-Origin: <origin>
-Access-Control-Allow-Credentials: true
 Access-Control-Allow-Headers: Content-Type, Authorization
 Access-Control-Allow-Methods: GET, POST, PATCH, DELETE, OPTIONS
 ```
@@ -52,69 +61,83 @@ Requests from origins not in the allowed list receive no CORS headers and will b
 
 ---
 
-#### `GET /auth/google`
+#### `POST /auth/verify`
 
-Initiates Google OAuth sign-in. Redirects the browser to Google's consent page.
+Verifies a Google ID token and returns a signed JWT. Called by the extension after completing the OAuth PKCE flow.
 
 **Auth required**: No
 
-**Query params**:
+**Request body**:
+```json
+{ "idToken": "<google-id-token>" }
+```
 
-| Param | Required | Description |
+| Field | Required | Description |
 |---|---|---|
-| `from` | No | Set to `extension` to trigger the extension sign-in flow (token passed in redirect URL rather than cookie-only) |
+| `idToken` | Yes | Google ID token obtained via OAuth PKCE code exchange |
 
-**Response**: HTTP 307 redirect to `https://accounts.google.com/o/oauth2/auth`
+**Response** (HTTP 200):
+```json
+{ "token": "<jwt>" }
+```
 
-**Side effects**: Sets `oauth_state` cookie (HttpOnly, Secure, SameSiteLax, 5-minute TTL).
-
----
-
-#### `GET /auth/google/callback`
-
-OAuth callback. Called by Google after the user consents. Not called directly by clients.
-
-**Auth required**: No
-
-**Query params**:
-
-| Param | Description |
-|---|---|
-| `state` | Must match the `oauth_state` cookie value |
-| `code` | Authorization code from Google |
-
-**Responses**:
-
-- HTTP 400: `{ "error": "invalid state" }` — state mismatch (CSRF protection)
-- HTTP 500: `{ "error": "oauth exchange failed" }` — token exchange error
-- HTTP 500: `{ "error": "failed to get user info" }` — Google userinfo call failed
+**Error responses**:
+- HTTP 400: `{ "error": "idToken is required" }` — missing or empty token
+- HTTP 401: `{ "error": "invalid id token" }` — signature/audience/issuer verification failed
 - HTTP 500: `{ "error": "failed to upsert user" }` — DB error
-- HTTP 307 redirect to `ADMIN_APP_URL/auth-success?token=<jwt>` — when `from=extension`
-- HTTP 307 redirect to `ADMIN_APP_URL` — for web sign-in
+- HTTP 500: `{ "error": "failed to sign token" }` — JWT signing error
 
 **Side effects**:
-- Clears `oauth_state` cookie.
-- Sets `rred_token` cookie (HttpOnly, Secure, SameSiteLax, 30-day TTL).
 - Creates or updates user record; creates personal workspace on first sign-in; links pre-signup memberships.
 
 ---
 
-#### `POST /auth/logout`
+#### `POST /auth/code`
 
-Clears the session cookie.
+Creates a short-lived, single-use auth code tied to the caller's JWT. The extension uses this to open the web admin without exposing the JWT in the URL.
 
-**Auth required**: No (the cookie is cleared regardless)
+**Auth required**: Yes
 
 **Request body**: None
 
 **Response** (HTTP 200):
 ```json
-{ "status": "ok" }
+{ "code": "<64-char-hex-string>" }
 ```
 
-**Side effects**: Sets `rred_token` cookie with `MaxAge: -1` (immediate expiry).
+The code expires after 60 seconds and can only be redeemed once.
 
-Note: this endpoint does not invalidate the JWT itself — the token remains valid until its 30-day expiry. The extension handles logout by removing the JWT from `browser.storage.local` directly.
+**Error responses**:
+- HTTP 401: unauthorized
+- HTTP 500: `{ "error": "failed to generate code" }` or `{ "error": "failed to store code" }`
+
+---
+
+#### `POST /auth/code/redeem`
+
+Exchanges a one-time auth code for the JWT it was created from. Called by the web admin on page load.
+
+**Auth required**: No
+
+**Request body**:
+```json
+{ "code": "<auth-code>" }
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `code` | Yes | The auth code from `POST /auth/code` |
+
+**Response** (HTTP 200):
+```json
+{ "token": "<jwt>" }
+```
+
+**Error responses**:
+- HTTP 400: `{ "error": "code is required" }` — missing or empty code
+- HTTP 401: `{ "error": "invalid or expired code" }` — code not found, already used, or expired
+
+> **Warning**: The `code` parameter on `/auth/callback` URLs is a Google authorization code, NOT an rRed auth code. Do not send Google codes to this endpoint — they will fail with 401.
 
 ---
 
@@ -151,7 +174,7 @@ Returns the authenticated user's profile.
 
 #### `GET /resolve`
 
-Resolves a redirect alias to a target URL. This is the endpoint called by the extension's background service worker on every `http://r/*` navigation.
+Resolves a redirect alias to a target URL. This is the endpoint called by the extension's redirect page on every `r/*` navigation.
 
 **Auth required**: Yes
 
@@ -171,7 +194,7 @@ Resolves a redirect alias to a target URL. This is the endpoint called by the ex
 - HTTP 401: unauthorized
 - HTTP 404: `{ "error": "alias not found" }` — alias doesn't exist in any of the user's workspaces
 
-Resolution uses the user's workspace priority order (lowest `priority_index` wins) when the alias exists in multiple workspaces.
+Resolution uses the user's workspace priority order (lowest index wins) when the alias exists in multiple workspaces.
 
 ---
 
@@ -181,7 +204,7 @@ Resolution uses the user's workspace priority order (lowest `priority_index` win
 
 #### `GET /links`
 
-Returns redirects across all workspaces the caller is a member of, ordered by `updated_at DESC`.
+Returns redirects across all workspaces the caller is a member of, ordered by `updatedAt DESC`.
 
 **Auth required**: Yes
 
@@ -222,7 +245,7 @@ Returns an empty array `[]` (not null) when there are no results.
 
 #### `GET /workspaces`
 
-Returns all workspaces the caller is a member of, ordered by `priority_index ASC`.
+Returns all workspaces the caller is a member of, ordered by the user's workspace priority order.
 
 **Auth required**: Yes
 
@@ -233,14 +256,12 @@ Returns all workspaces the caller is a member of, ordered by `priority_index ASC
     "id": "uuid",
     "name": "Alice's workspace",
     "role": "owner",
-    "priorityIndex": 0,
     "createdAt": "2024-01-15T10:00:00Z"
   },
   {
     "id": "uuid",
     "name": "Engineering",
     "role": "user",
-    "priorityIndex": 1,
     "createdAt": "2024-01-20T09:00:00Z"
   }
 ]
@@ -254,7 +275,7 @@ Returns all workspaces the caller is a member of, ordered by `priority_index ASC
 
 #### `POST /workspaces`
 
-Creates a new workspace. The caller is automatically added as `owner` with the next available `priority_index`.
+Creates a new workspace. The caller is automatically added as `owner` and the workspace is appended to their workspace order.
 
 **Auth required**: Yes
 
@@ -281,7 +302,7 @@ Creates a new workspace. The caller is automatically added as `owner` with the n
 
 #### `PATCH /workspace-order`
 
-Updates the caller's workspace priority order. All workspace IDs must belong to the caller's workspaces.
+Updates the caller's workspace priority order.
 
 **Auth required**: Yes
 
@@ -290,7 +311,7 @@ Updates the caller's workspace priority order. All workspace IDs must belong to 
 { "order": ["uuid-1", "uuid-2", "uuid-3"] }
 ```
 
-The array is the complete ordered list of workspace IDs. Position 0 = `priority_index` 0 (highest priority).
+The array is the complete ordered list of workspace IDs. Position 0 = highest priority.
 
 **Response** (HTTP 200):
 ```json
@@ -299,7 +320,6 @@ The array is the complete ordered list of workspace IDs. Position 0 = `priority_
 
 **Error responses**:
 - HTTP 400: `{ "error": "invalid body" }` — malformed JSON
-- HTTP 400: `{ "error": "workspace not found in user's list" }` — an ID in `order` does not belong to the caller
 - HTTP 401: unauthorized
 - HTTP 500: internal errors
 
@@ -307,7 +327,7 @@ The array is the complete ordered list of workspace IDs. Position 0 = `priority_
 
 #### `GET /workspaces/{id}`
 
-Returns a single workspace, including the caller's role and priority index.
+Returns a single workspace, including the caller's role.
 
 **Auth required**: Yes. Caller must be a member of the workspace.
 
@@ -323,7 +343,6 @@ Returns a single workspace, including the caller's role and priority index.
   "id": "uuid",
   "name": "Engineering",
   "role": "owner",
-  "priorityIndex": 1,
   "createdAt": "2024-01-20T09:00:00Z"
 }
 ```
@@ -334,13 +353,39 @@ Returns a single workspace, including the caller's role and priority index.
 
 ---
 
+#### `PATCH /workspaces/{id}`
+
+Renames a workspace.
+
+**Auth required**: Yes. Caller must be an `owner` of the workspace.
+
+**Path params**: `id` = workspace UUID
+
+**Request body**:
+```json
+{ "name": "New Name" }
+```
+
+**Response** (HTTP 200):
+```json
+{ "status": "ok", "name": "New Name" }
+```
+
+**Error responses**:
+- HTTP 400: `{ "error": "name is required" }` — missing or empty name
+- HTTP 401: unauthorized
+- HTTP 403: `{ "error": "owner required" }`
+- HTTP 404: `{ "error": "workspace not found" }`
+
+---
+
 ### Workspace links
 
 ---
 
 #### `GET /workspaces/{id}/links`
 
-Returns links for a specific workspace, ordered by `updated_at DESC`.
+Returns links for a specific workspace, ordered by `updatedAt DESC`.
 
 **Auth required**: Yes. Caller must be a member of the workspace (any role).
 
@@ -397,7 +442,7 @@ Creates a new redirect in the workspace.
 - HTTP 400: `{ "error": "alias 'main' is reserved" }`
 - HTTP 401: unauthorized
 - HTTP 403: `{ "error": "not a member" }`
-- HTTP 409: `{ "error": "alias already exists in this workspace" }` — UNIQUE constraint violation
+- HTTP 409: `{ "error": "alias already exists in this workspace" }` — alias uniqueness violation
 
 ---
 
@@ -424,7 +469,7 @@ Updates one or more fields of a redirect. All fields are optional; only provided
 | `targetUrl` | New destination URL |
 | `title` | New title |
 
-Omitting a field leaves it unchanged (uses `COALESCE($param, existing_value)` in SQL).
+Omitting a field leaves it unchanged.
 
 **Response** (HTTP 200): Full updated GoLink object.
 
@@ -463,7 +508,7 @@ Deletes a redirect.
 
 #### `GET /workspaces/{id}/members`
 
-Returns all members of the workspace, ordered by `created_at ASC`.
+Returns all members of the workspace, ordered by `createdAt ASC`.
 
 **Auth required**: Yes. Caller must be a member of the workspace (any role).
 
@@ -482,7 +527,6 @@ Returns all members of the workspace, ordered by `created_at ASC`.
   },
   {
     "id": "uuid",
-    "userId": null,
     "workspaceId": "uuid",
     "email": "bob@example.com",
     "role": "user",
@@ -491,7 +535,7 @@ Returns all members of the workspace, ordered by `created_at ASC`.
 ]
 ```
 
-`userId` is `null` (omitted in JSON) for pre-signup memberships (invited by email before the user has signed in).
+`userId` is omitted for pre-signup memberships (invited by email before the user has signed in).
 
 **Error responses**:
 - HTTP 401: unauthorized
@@ -501,7 +545,7 @@ Returns all members of the workspace, ordered by `created_at ASC`.
 
 #### `POST /workspaces/{id}/members`
 
-Adds a member to the workspace by email. If the email belongs to an existing user, they are linked immediately. If not, a pre-signup membership is created. If the email is already a member, their role is updated.
+Adds a member to the workspace by email. If the email belongs to an existing user, they are linked immediately and the workspace is added to their order. If not, a pre-signup membership is created. If the email is already a member, their role is updated (upsert).
 
 **Auth required**: Yes. Caller must be an `owner` of the workspace.
 
@@ -521,8 +565,6 @@ Adds a member to the workspace by email. If the email belongs to an existing use
 | `role` | Yes | `user` or `owner` |
 
 Email is lowercased before storage.
-
-If the user already exists, their `user_workspace_order` is updated to include this workspace (appended with `MAX(priority_index) + 1`).
 
 **Response** (HTTP 201): Full Membership object (same shape as items in `GET /workspaces/{id}/members`).
 
@@ -553,7 +595,7 @@ Updates a member's role.
 | `role` | Yes | `user` or `owner` |
 
 **Business rules**:
-- Cannot demote yourself if you are the last owner of the workspace.
+- Cannot demote the last owner of the workspace.
 
 **Response** (HTTP 200): Full updated Membership object.
 
@@ -568,14 +610,14 @@ Updates a member's role.
 
 #### `DELETE /workspaces/{id}/members/{memberId}`
 
-Removes a member from the workspace. Also removes the workspace from their `user_workspace_order` if the user is known.
+Removes a member from the workspace. Also removes the workspace from their workspace order if the user is known.
 
 **Auth required**: Yes. Caller must be an `owner` of the workspace.
 
 **Path params**: `id` = workspace UUID, `memberId` = membership UUID
 
 **Business rules**:
-- Cannot remove yourself if you are the last owner of the workspace.
+- Cannot remove the last owner of the workspace.
 
 **Response** (HTTP 200):
 ```json
