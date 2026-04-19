@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react'
 import { BrowserRouter, Link, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
-import { api, clearToken, hasToken, saveToken } from './api'
+import { api, clearToken, hasToken, redeemAuthCode, saveToken } from './api'
 import type { User } from './types'
 import Home from './pages/Home'
 import CreateWorkspace from './pages/CreateWorkspace'
 import WorkspaceDetail from './pages/WorkspaceDetail'
 
 // The web app has no OAuth flow of its own.
-// It is always opened by the extension, which appends ?token=<jwt> to the URL.
-// The token is read once, stored in localStorage, and used as a Bearer token for all API calls.
+// It is always opened by the extension, which appends ?code=<one-time-code> to the URL.
+// The code is exchanged for a JWT via the backend, stored in localStorage, and used for all API calls.
 
 function NoTokenPage() {
   return (
@@ -73,27 +73,42 @@ function AppInner() {
   const navigate = useNavigate()
 
   useEffect(() => {
-    // If the extension passed a fresh token in the URL, save it and clean the URL.
     const params = new URLSearchParams(window.location.search)
-    const urlToken = params.get('token')
-    if (urlToken) {
-      saveToken(urlToken)
+
+    // The /auth/callback path is the Google OAuth redirect target — the extension's
+    // background script handles the Google code. The web app must NOT try to redeem
+    // the Google authorization code as an rRed auth code.
+    const isOAuthCallback = window.location.pathname === '/auth/callback'
+    const authCode = isOAuthCallback ? null : params.get('code')
+
+    function cleanUrlAndLoad() {
+      // Strip code/token from URL
+      params.delete('code')
       params.delete('token')
+      params.delete('state')
       const newUrl = window.location.pathname + (params.toString() ? `?${params}` : '')
       navigate(newUrl, { replace: true })
-    }
 
-    if (!hasToken()) {
-      setUser(null)
-      return
-    }
-
-    api.getMe()
-      .then(setUser)
-      .catch(() => {
-        clearToken()
+      if (!hasToken()) {
         setUser(null)
-      })
+        return
+      }
+      api.getMe()
+        .then(setUser)
+        .catch(() => { clearToken(); setUser(null) })
+    }
+
+    if (authCode) {
+      // Exchange the one-time code for a JWT via the backend
+      redeemAuthCode(authCode)
+        .then((token) => {
+          if (token) saveToken(token)
+          cleanUrlAndLoad()
+        })
+        .catch(() => cleanUrlAndLoad())
+    } else {
+      cleanUrlAndLoad()
+    }
   }, [])
 
   function handleLogout() {

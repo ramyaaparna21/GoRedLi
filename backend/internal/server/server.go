@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/goredli/backend/internal/auth"
 	"github.com/goredli/backend/internal/config"
@@ -23,13 +24,18 @@ func Build(cfg *config.Config, store *db.Store) http.Handler {
 
 	mux := http.NewServeMux()
 
+	// Rate limiter for auth endpoints: 20 requests per minute per IP
+	authRL := middleware.NewRateLimiter(20, 1*time.Minute)
+
 	authed := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			middleware.AuthMiddleware(jwtAuth, next).ServeHTTP(w, r)
 		}
 	}
 
-	mux.HandleFunc("POST /auth/verify", h.VerifyToken)
+	mux.HandleFunc("POST /auth/verify", middleware.RateLimit(authRL, h.VerifyToken))
+	mux.HandleFunc("POST /auth/code", authed(middleware.RateLimit(authRL, h.CreateAuthCode)))
+	mux.HandleFunc("POST /auth/code/redeem", middleware.RateLimit(authRL, h.RedeemAuthCode))
 
 	mux.HandleFunc("GET /me", authed(h.Me))
 	mux.HandleFunc("GET /resolve", authed(h.Resolve))
@@ -51,7 +57,16 @@ func Build(cfg *config.Config, store *db.Store) http.Handler {
 	mux.HandleFunc("PATCH /workspaces/{id}/members/{memberId}", authed(h.UpdateMember))
 	mux.HandleFunc("DELETE /workspaces/{id}/members/{memberId}", authed(h.DeleteMember))
 
-	return corsMiddleware(cfg, mux)
+	return securityHeaders(corsMiddleware(cfg, mux))
+}
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+		next.ServeHTTP(w, r)
+	})
 }
 
 func corsMiddleware(cfg *config.Config, next http.Handler) http.Handler {

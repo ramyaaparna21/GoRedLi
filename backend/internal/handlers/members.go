@@ -44,6 +44,7 @@ func (h *Handler) AddMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.limitBody(w, r)
 	var body struct {
 		Email string `json:"email"`
 		Role  string `json:"role"`
@@ -92,6 +93,7 @@ func (h *Handler) UpdateMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.limitBody(w, r)
 	var body struct {
 		Role string `json:"role"`
 	}

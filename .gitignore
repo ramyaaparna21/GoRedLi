@@ -14,6 +14,13 @@ backend/bootstrap
 client_secret_*.json
 extension/.env
 infra/terraform.tfvars
+*.csv
+
+# Extension build artifacts
+extension/rred-extension-v*.zip
+
+# Media files
+*.mp3
 infra/terraform.tfstate
 infra/terraform.tfstate.backup
 infra/.terraform/

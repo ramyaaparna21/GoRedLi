@@ -17,6 +17,13 @@ type Handler struct {
 	GoogleVerifier *auth.GoogleVerifier
 }
 
+// maxBodySize is the maximum allowed request body size (1 MB).
+const maxBodySize = 1 << 20
+
+func (h *Handler) limitBody(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+}
+
 func (h *Handler) writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

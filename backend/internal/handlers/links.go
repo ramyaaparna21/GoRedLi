@@ -3,11 +3,20 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
 	"github.com/goredli/backend/internal/middleware"
 )
+
+func isSafeURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return u.Scheme == "http" || u.Scheme == "https"
+}
 
 func parseOffsetLimit(r *http.Request) (int, int) {
 	offset := 0
@@ -88,6 +97,7 @@ func (h *Handler) CreateLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.limitBody(w, r)
 	var body struct {
 		Alias     string `json:"alias"`
 		TargetURL string `json:"targetUrl"`
@@ -103,6 +113,10 @@ func (h *Handler) CreateLink(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.EqualFold(body.Alias, "main") {
 		h.writeError(w, http.StatusBadRequest, "alias 'main' is reserved")
+		return
+	}
+	if !isSafeURL(body.TargetURL) {
+		h.writeError(w, http.StatusBadRequest, "targetUrl must use http or https scheme")
 		return
 	}
 
@@ -136,6 +150,7 @@ func (h *Handler) UpdateLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.limitBody(w, r)
 	var body struct {
 		Alias     *string `json:"alias"`
 		TargetURL *string `json:"targetUrl"`
@@ -147,6 +162,10 @@ func (h *Handler) UpdateLink(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Alias != nil && strings.EqualFold(*body.Alias, "main") {
 		h.writeError(w, http.StatusBadRequest, "alias 'main' is reserved")
+		return
+	}
+	if body.TargetURL != nil && !isSafeURL(*body.TargetURL) {
+		h.writeError(w, http.StatusBadRequest, "targetUrl must use http or https scheme")
 		return
 	}
 

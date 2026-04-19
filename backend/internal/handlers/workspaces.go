@@ -47,6 +47,7 @@ func (h *Handler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.GetUserID(r.Context())
 	userEmail := middleware.GetUserEmail(r.Context())
 
+	h.limitBody(w, r)
 	var body struct {
 		Name string `json:"name"`
 	}
@@ -78,6 +79,7 @@ func (h *Handler) UpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.limitBody(w, r)
 	var body struct {
 		Name string `json:"name"`
 	}
@@ -97,6 +99,7 @@ func (h *Handler) UpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) UpdateWorkspaceOrder(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.GetUserID(r.Context())
 
+	h.limitBody(w, r)
 	var body struct {
 		Order []string `json:"order"`
 	}

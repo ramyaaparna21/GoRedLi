@@ -11,6 +11,37 @@ async function getJWT(): Promise<string | null> {
   return typeof result.jwt === 'string' ? result.jwt : null
 }
 
+async function getAuthCode(jwt: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${API_URL}/auth/code`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${jwt}` },
+    })
+    if (!res.ok) return null
+    const { code } = await res.json() as { code: string }
+    return code
+  } catch {
+    return null
+  }
+}
+
+async function buildAdminUrl(jwt: string, extra?: string): Promise<string> {
+  const code = await getAuthCode(jwt)
+  let url = ADMIN_APP_URL
+  if (code) url += `?code=${encodeURIComponent(code)}`
+  if (extra) url += (code ? '&' : '?') + extra
+  return url
+}
+
+function isSafeUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 async function resolve() {
   const params = new URLSearchParams(window.location.search)
   const alias = params.get('alias') || ''
@@ -21,13 +52,22 @@ async function resolve() {
     return
   }
 
-  const adminUrl = `${ADMIN_APP_URL}?token=${encodeURIComponent(jwt)}`
-
   if (!alias || alias === 'main') {
-    window.location.href = adminUrl
+    window.location.href = await buildAdminUrl(jwt)
     return
   }
 
+  // Try local cache first for instant redirect
+  try {
+    const cache = await browser.storage.local.get('aliasMap')
+    const aliasMap = cache.aliasMap as Record<string, string> | undefined
+    if (aliasMap && aliasMap[alias] && isSafeUrl(aliasMap[alias])) {
+      window.location.href = aliasMap[alias]
+      return
+    }
+  } catch { /* cache miss — fall through to API */ }
+
+  // Fall back to API
   try {
     const resp = await fetch(`${API_URL}/resolve?alias=${encodeURIComponent(alias)}`, {
       headers: { Authorization: `Bearer ${jwt}` },
@@ -35,15 +75,19 @@ async function resolve() {
 
     if (resp.ok) {
       const { targetUrl } = await resp.json() as { targetUrl: string }
+      if (!isSafeUrl(targetUrl)) {
+        window.location.href = await buildAdminUrl(jwt)
+        return
+      }
       window.location.href = targetUrl
     } else if (resp.status === 401) {
       await browser.storage.local.remove('jwt')
       window.location.href = ADMIN_APP_URL
     } else {
-      window.location.href = `${adminUrl}&notfound=${encodeURIComponent(alias)}`
+      window.location.href = await buildAdminUrl(jwt, `notfound=${encodeURIComponent(alias)}`)
     }
   } catch {
-    window.location.href = adminUrl
+    window.location.href = await buildAdminUrl(jwt)
   }
 }
 
